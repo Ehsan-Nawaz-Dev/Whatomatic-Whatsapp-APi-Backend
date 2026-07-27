@@ -81,7 +81,7 @@ app.get("/", (req, res) => {
 
   // Otherwise, redirect to the frontend dashboard
   // Use the env var or fallback
-  const frontendUrl = process.env.FRONTEND_APP_URL || "https://whatflow-alpha.vercel.app";
+  const frontendUrl = process.env.FRONTEND_APP_URL || "https://whatomatic-whatsapp-api-frontend.vercel.app";
   res.redirect(frontendUrl);
 });
 
