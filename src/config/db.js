@@ -8,23 +8,23 @@ export const connectDB = async () => {
     return;
   }
 
-  const uri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/whatflow";
+    const uri = process.env.DATABASE_URL || process.env.MONGODB_URI || process.env.MONGO_URI || "mongodb://127.0.0.1:27017/whatflow";
 
-  try {
-    const db = await mongoose.connect(uri, {
-      autoIndex: true,
-    });
-    isConnected = db.connections[0].readyState === 1;
-    console.log("MongoDB connected");
+    try {
+      const db = await mongoose.connect(uri, {
+        autoIndex: true,
+      });
+      isConnected = db.connections[0].readyState === 1;
+      console.log("MongoDB connected successfully");
 
-    // Seed default plans and admin credentials
-    await seedPlans();
-    await seedAdmin();
-
-    // One-time migration: upgrade old shipping templates to include tracking info
-    await upgradeShippingTemplates();
-  } catch (err) {
-    console.error("MongoDB connection error", err);
-    throw err;
-  }
+      // Seed default plans and admin credentials asynchronously without blocking lambda responses
+      Promise.all([
+        seedPlans(),
+        seedAdmin(),
+        upgradeShippingTemplates()
+      ]).catch(seedErr => console.warn("[Seeder] Non-critical background seed warning:", seedErr.message));
+    } catch (err) {
+      console.error("MongoDB connection error:", err.message);
+      throw err;
+    }
 };
