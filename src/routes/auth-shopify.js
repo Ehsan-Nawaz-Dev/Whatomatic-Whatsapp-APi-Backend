@@ -19,7 +19,7 @@ dotenv.config();
 
 const router = Router();
 
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "f89bab1b3e9044eae648188ba2712eec";
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
 const SHOPIFY_SCOPES = process.env.SHOPIFY_SCOPES || "read_checkouts,read_customers,read_fulfillments,read_orders,write_orders,read_billing,write_billing";
 console.log(`[OAuth] Active Scopes: ${SHOPIFY_SCOPES}`);

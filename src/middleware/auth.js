@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "f89bab1b3e9044eae648188ba2712eec";
 
 /**
  * Middleware to verify Shopify Session Token (JWT)
