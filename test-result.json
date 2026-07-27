@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "messageId": "wamid.HBgMOTIzMDQ4Nzk5MDg3FQIAERgSNTkwMzE3QzYyMTBGMjBFQzM3AA==",
+  "data": {
+    "messaging_product": "whatsapp",
+    "contacts": [
+      {
+        "input": "+923048799087",
+        "wa_id": "923048799087"
+      }
+    ],
+    "messages": [
+      {
+        "id": "wamid.HBgMOTIzMDQ4Nzk5MDg3FQIAERgSNTkwMzE3QzYyMTBGMjBFQzM3AA=="
+      }
+    ]
+  }
+}
