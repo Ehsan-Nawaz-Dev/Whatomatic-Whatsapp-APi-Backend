@@ -15,6 +15,14 @@ const getShopDomain = (req) => {
     return shop.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
 };
 
+// GET /api/whatsapp/config - Get dynamic Meta App ID configuration
+router.get("/config", (req, res) => {
+    res.json({
+        metaAppId: process.env.META_APP_ID || process.env.VITE_META_APP_ID || "",
+        metaConfigId: process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || ""
+    });
+});
+
 // GET /api/whatsapp/status - Get connection status
 router.get("/status", async (req, res) => {
     try {
