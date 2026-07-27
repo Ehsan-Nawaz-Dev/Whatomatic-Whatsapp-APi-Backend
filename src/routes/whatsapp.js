@@ -18,8 +18,8 @@ const getShopDomain = (req) => {
 // GET /api/whatsapp/config - Get dynamic Meta App ID configuration
 router.get("/config", (req, res) => {
     res.json({
-        metaAppId: process.env.META_APP_ID || process.env.VITE_META_APP_ID || "",
-        metaConfigId: process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || ""
+        metaAppId: process.env.META_APP_ID || "1031248766177799",
+        metaConfigId: process.env.META_CONFIG_ID || "1981964775839147"
     });
 });
 
