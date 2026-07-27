@@ -181,8 +181,13 @@ router.post("/embedded-signup", async (req, res) => {
             if (tokenRes.success) {
                 activeAccessToken = tokenRes.accessToken;
             } else {
-                console.warn("[Embedded Signup] Token exchange fallback:", tokenRes.error);
+                console.warn("[Embedded Signup] Token exchange failed:", tokenRes.error);
                 activeAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+                if (!activeAccessToken) {
+                    return res.status(400).json({ 
+                        error: `Meta Token Exchange failed: ${tokenRes.error}` 
+                    });
+                }
             }
         }
 

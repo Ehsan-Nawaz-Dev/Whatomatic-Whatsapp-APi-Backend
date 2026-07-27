@@ -73,8 +73,8 @@ class WhatsAppCloudService {
      */
     async exchangeEmbeddedCode(code) {
         try {
-            const appId = process.env.SHOPIFY_API_KEY || process.env.META_APP_ID;
-            const appSecret = process.env.SHOPIFY_API_SECRET || process.env.META_APP_SECRET;
+            const appId = process.env.META_APP_ID || "1031248766177799";
+            const appSecret = process.env.META_APP_SECRET || process.env.SHOPIFY_API_SECRET || "";
 
             const response = await axios.get(`${this.apiUrl}/oauth/access_token`, {
                 params: {
