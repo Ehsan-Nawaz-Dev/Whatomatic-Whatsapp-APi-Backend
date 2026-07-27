@@ -327,13 +327,15 @@ router.get('/status', async (req, res) => {
             : baseLimit + Math.max(0, (merchant.trialLimit || 10) - 10);
         const newlyInstalled = merchant.installedAt ? (Date.now() - new Date(merchant.installedAt).getTime() < 10 * 60 * 1000) : false;
 
-        res.json({
-            plan: merchant.plan || 'free',
-            status: merchant.billingStatus || 'none',
+        // Packages temporarily disabled for testing mode — unlimited access
+        return res.json({
+            plan: 'enterprise',
+            status: 'active',
             usage: merchant.usage || 0,
-            limit: limit,
-            isNewlyInstalled: newlyInstalled,
-            hasUsagePlan: !!merchant.shopifyUsageLineItemId
+            limit: 999999,
+            isNewlyInstalled: false,
+            hasUsagePlan: true,
+            packagesDisabled: true
         });
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch status' });
