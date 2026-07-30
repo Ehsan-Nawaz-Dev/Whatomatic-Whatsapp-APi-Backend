@@ -79,16 +79,16 @@ class WhatsAppCloudService {
             const appId = process.env.META_APP_ID || "1031248766177799";
             const appSecret = process.env.META_APP_SECRET || process.env.SHOPIFY_API_SECRET || "";
 
-            // Meta FB.login SDK generates codes without a redirect_uri parameter.
-            // We try sequential attempts to guarantee success for all SDK & OAuth popup flows.
-            const attempts = [
-                // Attempt 1: Standard FB.login SDK exchange (NO redirect_uri parameter)
-                { client_id: appId, client_secret: appSecret, code: code },
-                // Attempt 2: If redirectUri was explicitly specified in popup dialog window
-                ...(redirectUri ? [{ client_id: appId, client_secret: appSecret, code: code, redirect_uri: redirectUri }] : []),
-                // Attempt 3: Empty string redirect_uri
-                { client_id: appId, client_secret: appSecret, code: code, redirect_uri: "" }
-            ];
+            // Build attempts prioritizing redirect_uri when provided to avoid single-use code invalidation
+            const attempts = [];
+            
+            if (redirectUri) {
+                attempts.push({ client_id: appId, client_secret: appSecret, code: code, redirect_uri: redirectUri });
+                attempts.push({ client_id: appId, client_secret: appSecret, code: code });
+            } else {
+                attempts.push({ client_id: appId, client_secret: appSecret, code: code });
+                attempts.push({ client_id: appId, client_secret: appSecret, code: code, redirect_uri: "" });
+            }
 
             let lastError = null;
 
