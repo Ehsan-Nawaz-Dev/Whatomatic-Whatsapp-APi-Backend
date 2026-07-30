@@ -399,6 +399,48 @@ router.post("/embedded-signup", async (req, res) => {
     }
 });
 
+// POST /api/whatsapp/register - Register phone number with Meta for Cloud API messaging
+router.post("/register", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ success: false, error: "Missing shop parameter" });
+
+        const merchant = await Merchant.findOne({ shopDomain });
+        if (!merchant || !merchant.metaPhoneNumberId || !merchant.metaAccessToken) {
+            return res.status(400).json({ success: false, error: "Meta WhatsApp credentials not found" });
+        }
+
+        const pin = req.body?.pin || merchant.metaRegistrationPin;
+        const regRes = await whatsappCloudService.registerPhoneNumber(merchant.metaPhoneNumberId, merchant.metaAccessToken, pin);
+
+        if (regRes.success) {
+            await Merchant.updateOne(
+                { shopDomain },
+                { $set: { metaRegistered: true, metaRegisteredAt: new Date(), metaRegistrationPin: regRes.pin } }
+            );
+            return res.json({
+                success: true,
+                message: "WhatsApp phone number registered successfully for Cloud API messaging!"
+            });
+        }
+
+        if (regRes.error && regRes.error.includes("SMB")) {
+            return res.status(400).json({
+                success: false,
+                error: "Your number is an SMB WhatsApp account. Open Meta WhatsApp Manager (business.facebook.com) -> Phone Numbers and click 'Verify' to receive your 6-digit SMS verification code."
+            });
+        }
+
+        res.status(400).json({
+            success: false,
+            error: regRes.error || "Phone registration failed"
+        });
+    } catch (err) {
+        console.error("Error registering phone number:", err);
+        res.status(500).json({ success: false, error: err.message || "Internal server error" });
+    }
+});
+
 // POST /api/whatsapp/disconnect - Disconnect / Remove Meta credentials
 router.post("/disconnect", async (req, res) => {
     try {
