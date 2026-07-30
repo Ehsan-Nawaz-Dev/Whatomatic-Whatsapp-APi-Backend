@@ -201,6 +201,9 @@ router.put("/:id", async (req, res) => {
         isPoll: req.body.isPoll,
         pollOptions: req.body.pollOptions,
         sendingDelay: req.body.sendingDelay || 0,
+        ...(req.body.metaTemplateName && { metaTemplateName: req.body.metaTemplateName }),
+        ...(req.body.metaLanguage && { metaLanguage: req.body.metaLanguage }),
+        ...(req.body.metaStatus && { metaStatus: req.body.metaStatus }),
       },
       { new: true },
     );
