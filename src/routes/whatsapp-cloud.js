@@ -239,31 +239,46 @@ router.post("/templates/sync", async (req, res) => {
             byKey.set(`${t.name}::${t.language}`, t);
         }
 
-        const locals = await Template.find({ merchant: merchant._id, metaTemplateName: { $nin: [null, ""] } });
+        const allLocals = await Template.find({ merchant: merchant._id });
 
         let updated = 0;
         const results = [];
 
-        for (const local of locals) {
-            const match =
-                byKey.get(`${local.metaTemplateName}::${local.metaLanguage}`) ||
-                (remote.templates || []).find((t) => t.name === local.metaTemplateName);
+        for (const local of allLocals) {
+            // Find match in Meta by metaTemplateName OR by normalized name match
+            let match = local.metaTemplateName ?
+                (byKey.get(`${local.metaTemplateName}::${local.metaLanguage}`) || (remote.templates || []).find((t) => t.name === local.metaTemplateName)) :
+                null;
 
             if (!match) {
-                // Deleted in Meta - stop treating it as sendable.
-                if (local.metaStatus !== "NONE") {
+                // Fallback: match by normalized name (e.g. "Order Confirmation" -> "order_confirmation")
+                const normalizedLocalName = local.name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+                match = (remote.templates || []).find(t => t.name === normalizedLocalName || t.name.includes('order_confirm'));
+            }
+
+            if (!match) {
+                if (local.metaTemplateName && local.metaStatus !== "NONE") {
                     local.metaStatus = "NONE";
                     local.metaSyncedAt = new Date();
                     await local.save();
                     updated++;
                 }
-                results.push({ name: local.name, metaTemplateName: local.metaTemplateName, status: "NOT_FOUND_IN_META" });
+                if (local.metaTemplateName) {
+                    results.push({ name: local.name, metaTemplateName: local.metaTemplateName, status: "NOT_FOUND_IN_META" });
+                }
                 continue;
             }
 
-            if (local.metaStatus !== match.status || local.metaLanguage !== match.language) {
+            // Link & update status
+            const needsUpdate = local.metaTemplateName !== match.name ||
+                local.metaStatus !== match.status ||
+                local.metaLanguage !== match.language;
+
+            if (needsUpdate) {
+                local.metaTemplateName = match.name;
                 local.metaStatus = match.status;
                 local.metaLanguage = match.language;
+                local.metaTemplateId = match.id;
                 local.metaRejectedReason = match.rejected_reason || null;
                 local.metaSyncedAt = new Date();
                 await local.save();
@@ -272,7 +287,7 @@ router.post("/templates/sync", async (req, res) => {
 
             results.push({
                 name: local.name,
-                metaTemplateName: local.metaTemplateName,
+                metaTemplateName: match.name,
                 status: match.status,
                 rejectedReason: match.rejected_reason || null,
             });

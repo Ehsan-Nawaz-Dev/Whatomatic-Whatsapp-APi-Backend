@@ -572,11 +572,14 @@ class WhatsAppCloudService {
         // An explicitly configured component payload wins.
         if (template?.components?.length > 0) return template.components;
 
-        const variables = template?.metaVariables || [];
-        if (variables.length === 0) return [];
+        let variables = template?.metaVariables || [];
+        if (!variables || variables.length === 0) {
+            // Default 7 standard order placeholders if metaVariables is empty
+            variables = ["customer_name", "store_name", "order_number", "items_list", "grand_total", "address", "city"];
+        }
 
         const parameters = variables.map((name) => {
-            const raw = placeholderMap ? placeholderMap[`{{${name}}}`] : "";
+            const raw = placeholderMap ? (placeholderMap[`{{${name}}}`] || placeholderMap[name]) : "";
             const text = String(raw ?? "").replace(/[\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim();
             // Meta rejects empty parameter values outright.
             return { type: "text", text: text || "-" };
