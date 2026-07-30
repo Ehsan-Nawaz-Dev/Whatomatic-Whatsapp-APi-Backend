@@ -71,18 +71,40 @@ class WhatsAppCloudService {
     /**
      * Exchanges 1-Click Embedded Signup Authorization Code for Access Token
      */
-    async exchangeEmbeddedCode(code) {
+    async exchangeEmbeddedCode(code, redirectUri = "") {
         try {
             const appId = process.env.META_APP_ID || "1031248766177799";
             const appSecret = process.env.META_APP_SECRET || process.env.SHOPIFY_API_SECRET || "";
 
-            const response = await axios.get(`${this.apiUrl}/oauth/access_token`, {
-                params: {
-                    client_id: appId,
-                    client_secret: appSecret,
-                    code: code
+            const params = {
+                client_id: appId,
+                client_secret: appSecret,
+                code: code
+            };
+
+            if (redirectUri) {
+                params.redirect_uri = redirectUri;
+            }
+
+            let response;
+            try {
+                response = await axios.get(`${this.apiUrl}/oauth/access_token`, { params });
+            } catch (err) {
+                const errMsg = err.response?.data?.error?.message || "";
+                if (errMsg.includes("redirect_uri") || err.response?.status === 400) {
+                    console.warn("[Meta Embedded Signup] Primary token exchange notice, trying fallback redirect_uri parameter...");
+                    // Try alternate redirect_uri variations (empty string vs provided redirectUri)
+                    const altParams = {
+                        client_id: appId,
+                        client_secret: appSecret,
+                        code: code,
+                        redirect_uri: redirectUri ? "" : (process.env.META_REDIRECT_URI || "")
+                    };
+                    response = await axios.get(`${this.apiUrl}/oauth/access_token`, { params: altParams });
+                } else {
+                    throw err;
                 }
-            });
+            }
 
             return {
                 success: true,
@@ -97,6 +119,7 @@ class WhatsAppCloudService {
             };
         }
     }
+
 
     /**
      * Programmatically auto-subscribes app webhooks for a merchant WABA ID

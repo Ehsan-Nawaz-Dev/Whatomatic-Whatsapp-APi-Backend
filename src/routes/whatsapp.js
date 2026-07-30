@@ -172,15 +172,16 @@ router.post("/embedded-signup", async (req, res) => {
         const shopDomain = getShopDomain(req);
         if (!shopDomain) return res.status(400).json({ error: "Missing shop parameter" });
 
-        const { code, wabaId, phoneNumberId, accessToken: directAccessToken } = req.body;
+        const { code, wabaId, phoneNumberId, accessToken: directAccessToken, redirectUri } = req.body;
 
         let activeAccessToken = directAccessToken;
 
         if (code && !activeAccessToken) {
-            const tokenRes = await whatsappCloudService.exchangeEmbeddedCode(code);
+            const tokenRes = await whatsappCloudService.exchangeEmbeddedCode(code, redirectUri);
             if (tokenRes.success) {
                 activeAccessToken = tokenRes.accessToken;
             } else {
+
                 console.warn("[Embedded Signup] Token exchange failed:", tokenRes.error);
                 activeAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
                 if (!activeAccessToken) {
