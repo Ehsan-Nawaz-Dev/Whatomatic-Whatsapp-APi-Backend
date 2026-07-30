@@ -104,8 +104,9 @@ app.use("/auth", (req, res) => {
 app.use("/api", apiRouter);
 app.use("/Api", apiRouter);
 
-// Export app for serverless
+// Export app for serverless (both named and default export for Vercel)
 export { app };
+export default app;
 
 // Only run server if not in serverless environment
 if (process.env.VERCEL !== "1") {
