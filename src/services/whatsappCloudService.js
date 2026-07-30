@@ -98,6 +98,54 @@ class WhatsAppCloudService {
     }
 
     /**
+     * Turns a Meta send error into something a merchant can act on.
+     * The raw Graph messages ("Message undeliverable") do not say what to change.
+     */
+    describeSendError(metaError) {
+        const code = metaError?.code;
+        const detail = metaError?.error_data?.details || metaError?.message || "";
+
+        switch (code) {
+            case 131047:
+            case 131026:
+                return {
+                    reason: "outside_24h_window",
+                    message:
+                        "WhatsApp only allows free-form messages within 24 hours of the customer's last reply. " +
+                        "This customer has not messaged you, so this message must be sent as an approved Meta template.",
+                };
+            case 132000:
+            case 132001:
+                return {
+                    reason: "template_not_found",
+                    message:
+                        "The Meta template does not exist or is not approved in this WhatsApp Business Account. " +
+                        "Submit it for approval and wait for Meta to approve it.",
+                };
+            case 132005:
+                return { reason: "template_text_mismatch", message: "The template text no longer matches the approved version in Meta." };
+            case 132007:
+                return { reason: "template_param_mismatch", message: "The template's variable count does not match the approved template." };
+            case 131042:
+                return {
+                    reason: "billing",
+                    message:
+                        "Meta rejected the message for a billing reason. Add a valid payment method to the WhatsApp Business Account in Meta Business Settings.",
+                };
+            case 133010:
+                return { reason: "not_registered", message: "The phone number is not registered for Cloud API messaging." };
+            case 131031:
+                return { reason: "account_locked", message: "This WhatsApp Business Account has been restricted by Meta." };
+            case 131052:
+                return { reason: "media", message: "Meta could not download the media at the supplied URL." };
+            case 131008:
+                return { reason: "bad_request", message: `Meta rejected the message payload: ${detail}` };
+            default:
+                return null;
+        }
+    }
+
+    /**
      * True when a Graph API failure means the token is dead (expired/revoked/invalidated),
      * as opposed to a transient network or rate-limit blip. Only the former should ever
      * flip a merchant's connection to "disconnected".
@@ -322,10 +370,18 @@ class WhatsAppCloudService {
                 };
             }
 
-            console.error("[Meta Cloud API] Error sending message:", metaError || error.message);
+            const described = this.describeSendError(metaError);
+            if (described) {
+                console.error(`[Meta Cloud API] Send failed (${metaError.code} / ${described.reason}): ${described.message}`);
+            } else {
+                console.error("[Meta Cloud API] Error sending message:", metaError || error.message);
+            }
+
             return {
                 success: false,
-                error: metaError?.message || error.message,
+                error: described?.message || metaError?.message || error.message,
+                metaError: metaError?.message,
+                reason: described?.reason,
                 code: metaError?.code,
                 authError: this.isAuthError(error),
                 details: error.response?.data,
@@ -492,6 +548,84 @@ class WhatsAppCloudService {
             console.warn(`[Meta Embedded Signup] Webhook subscription notice for WABA ${wabaId}:`, error.response?.data || error.message);
             return { success: false, error: error.response?.data?.error?.message || error.message };
         }
+    }
+
+    /**
+     * Builds the body-parameter components for an approved Meta template.
+     *
+     * Meta templates use positional {{1}}, {{2}} parameters, and the send is rejected
+     * if the count does not match the approved template. metaVariables records which
+     * placeholder feeds each position, in order.
+     *
+     * Meta also rejects parameter values containing newlines, tabs, or 4+ consecutive
+     * spaces, so values are flattened.
+     */
+    buildTemplateComponents(template, placeholderMap) {
+        // An explicitly configured component payload wins.
+        if (template?.components?.length > 0) return template.components;
+
+        const variables = template?.metaVariables || [];
+        if (variables.length === 0) return [];
+
+        const parameters = variables.map((name) => {
+            const raw = placeholderMap ? placeholderMap[`{{${name}}}`] : "";
+            const text = String(raw ?? "").replace(/[\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim();
+            // Meta rejects empty parameter values outright.
+            return { type: "text", text: text || "-" };
+        });
+
+        return [{ type: "body", parameters }];
+    }
+
+    /**
+     * Sends an automation message for a business-initiated conversation
+     * (order confirmation, shipping update, abandoned cart, ...).
+     *
+     * WhatsApp only permits free-form text/interactive messages within 24 hours of
+     * the customer's last reply. Automation recipients have typically never messaged
+     * the store, so that window is closed and ONLY an approved Meta template will be
+     * delivered. An approved template therefore always wins; free-form is a
+     * best-effort fallback for customers who are inside the window.
+     *
+     * @param {string} shopDomain
+     * @param {string} to
+     * @param {object} template  local Template document (may be null)
+     * @param {string} bodyText  rendered message text for the free-form path
+     */
+    async sendAutomationMessage(shopDomain, to, template, bodyText, placeholderMap = null) {
+        const hasApprovedTemplate = template?.metaTemplateName && template?.metaStatus === "APPROVED";
+
+        if (hasApprovedTemplate) {
+            const result = await this.sendTemplateMessage(
+                shopDomain,
+                to,
+                template.metaTemplateName,
+                template.metaLanguage || "en",
+                this.buildTemplateComponents(template, placeholderMap)
+            );
+            if (result.success) return result;
+
+            // If the template itself is the problem, a free-form retry may still work
+            // for a customer who is inside the 24h window.
+            console.warn(`[Meta Cloud API] Template '${template.metaTemplateName}' failed (${result.reason || result.code}). Trying free-form.`);
+        }
+
+        const buttons =
+            template?.isPoll && template?.pollOptions?.length > 0
+                ? template.pollOptions.map((opt, idx) => ({ id: `opt_${idx}`, title: opt }))
+                : null;
+
+        const result = buttons
+            ? await this.sendInteractiveButtonsMessage(shopDomain, to, bodyText, buttons)
+            : await this.sendTextMessage(shopDomain, to, bodyText);
+
+        if (!result.success && result.reason === "outside_24h_window" && !hasApprovedTemplate) {
+            result.error =
+                `${result.error} Submit "${template?.name || "this automation"}" to Meta from the Automations page and wait for approval.`;
+            result.needsTemplate = true;
+        }
+
+        return result;
     }
 
     /**

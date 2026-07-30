@@ -7,7 +7,7 @@ import { whatsappCloudService } from "../../services/whatsappCloudService.js";
 import { Template } from "../../models/Template.js";
 import { shopifyService } from "../../services/shopifyService.js";
 import crypto from "crypto";
-import { replacePlaceholders } from "../../utils/placeholderHelper.js";
+import { replacePlaceholders, buildPlaceholderMap } from "../../utils/placeholderHelper.js";
 import { normalizePhoneNumber } from "../../utils/phoneNormalizer.js";
 import { Plan } from "../../models/Plan.js";
 import { NotificationSettings } from "../../models/NotificationSettings.js";
@@ -576,14 +576,7 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
                         await new Promise(resolve => setTimeout(resolve, customerTemplate.sendingDelay * 60 * 1000));
                     }
 
-                    if (customerTemplate?.isPoll && customerTemplate?.pollOptions?.length > 0) {
-                        const buttons = customerTemplate.pollOptions.map((opt, idx) => ({ id: `opt_${idx}`, title: opt }));
-                        result = await whatsappCloudService.sendInteractiveButtonsMessage(shopDomain, customerPhoneFormatted, customerMsg, buttons);
-                    } else if (customerTemplate?.metaTemplateName) {
-                        result = await whatsappCloudService.sendTemplateMessage(shopDomain, customerPhoneFormatted, customerTemplate.metaTemplateName, customerTemplate.metaLanguage || "en");
-                    } else {
-                        result = await whatsappCloudService.sendTextMessage(shopDomain, customerPhoneFormatted, customerMsg);
-                    }
+                    result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, customerTemplate, customerMsg, buildPlaceholderMap({ order: fullOrderData, merchant: updatedMerchant }));
                     console.log(`[ShopifyWebhook] WhatsApp send result:`, result);
 
                     if (result && result.success) {
@@ -730,13 +723,7 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
                     await new Promise(resolve => setTimeout(resolve, cancelTemplate.sendingDelay * 60 * 1000));
                 }
 
-                let result;
-                if (cancelTemplate.isPoll && cancelTemplate.pollOptions?.length > 0) {
-                    const buttons = cancelTemplate.pollOptions.map((opt, idx) => ({ id: `cancel_${idx}`, title: opt }));
-                    result = await whatsappCloudService.sendInteractiveButtonsMessage(shopDomain, customerPhoneFormatted, cancelMsg, buttons);
-                } else {
-                    result = await whatsappCloudService.sendTextMessage(shopDomain, customerPhoneFormatted, cancelMsg);
-                }
+                let result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, cancelTemplate, cancelMsg, buildPlaceholderMap({ order, merchant }));
 
                 if (result?.success) {
                     if (merchant?.shopifyAccessToken && orderId) {
@@ -815,12 +802,7 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
                     await new Promise(resolve => setTimeout(resolve, abandonedTemplate.sendingDelay * 60 * 1000));
                 }
 
-                if (abandonedTemplate.isPoll && abandonedTemplate.pollOptions?.length > 0) {
-                    const buttons = abandonedTemplate.pollOptions.map((opt, idx) => ({ id: `abandoned_${idx}`, title: opt }));
-                    result = await whatsappCloudService.sendInteractiveButtonsMessage(shopDomain, customerPhoneFormatted, abandonedMsg, buttons);
-                } else {
-                    result = await whatsappCloudService.sendTextMessage(shopDomain, customerPhoneFormatted, abandonedMsg);
-                }
+                result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, abandonedTemplate, abandonedMsg, buildPlaceholderMap({ order, merchant }));
 
                 if (result?.success) {
                     const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });
@@ -909,7 +891,7 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
                     await new Promise(resolve => setTimeout(resolve, template.sendingDelay * 60 * 1000));
                 }
 
-                const result = template.isPoll ? await whatsappCloudService.sendInteractiveButtonsMessage(shopDomain, customerPhoneFormatted, fulfillmentMsg, template.pollOptions.map((opt, idx) => ({ id: `ful_${idx}`, title: opt }))) : await whatsappCloudService.sendTextMessage(shopDomain, customerPhoneFormatted, fulfillmentMsg);
+                const result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, template, fulfillmentMsg, buildPlaceholderMap({ order: orderForPlaceholders, merchant }));
 
                 if (result?.success) {
                     const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { whatsappCloudService } from "../services/whatsappCloudService.js";
 import { ActivityLog } from "../models/ActivityLog.js";
 import { Merchant } from "../models/Merchant.js";
+import { Template } from "../models/Template.js";
 
 const router = Router();
 
@@ -143,7 +144,7 @@ router.post("/templates", async (req, res) => {
         const shopDomain = getShopDomain(req);
         if (!shopDomain) return res.status(400).json({ success: false, error: "Missing shop parameter" });
 
-        const { name, category, language, bodyText, headerText, footerText, buttons, examples, components } = req.body;
+        const { name, category, language, bodyText, headerText, footerText, buttons, examples, components, templateId, variables } = req.body;
 
         if (!name || (!bodyText && (!components || components.length === 0))) {
             return res.status(400).json({
@@ -165,10 +166,42 @@ router.post("/templates", async (req, res) => {
         });
 
         if (result.success) {
+            // Link the Meta template back to the local automation template.
+            // Without this, metaTemplateName stayed empty forever and every automation
+            // fell through to a free-form message, which Meta rejects outside the
+            // 24-hour customer service window.
+            const merchant = await Merchant.findOne({ shopDomain });
+            if (merchant) {
+                const query = templateId
+                    ? { _id: templateId, merchant: merchant._id }
+                    : { merchant: merchant._id, name };
+
+                const linked = await Template.findOneAndUpdate(
+                    query,
+                    {
+                        $set: {
+                            metaTemplateName: result.name,
+                            metaLanguage: language || "en_US",
+                            metaCategory: category || "UTILITY",
+                            metaStatus: result.status || "PENDING",
+                            metaTemplateId: result.id,
+                            metaVariables: Array.isArray(variables) ? variables : [],
+                            metaSyncedAt: new Date(),
+                        },
+                    },
+                    { new: true }
+                );
+
+                if (!linked) {
+                    console.warn(`[Meta Templates] Submitted '${result.name}' but found no local template to link for ${shopDomain}.`);
+                }
+            }
+
             res.json({
                 success: true,
                 message: `Template '${result.name}' submitted to Meta for approval!`,
                 templateId: result.id,
+                metaTemplateName: result.name,
                 status: result.status
             });
         } else {
@@ -180,6 +213,79 @@ router.post("/templates", async (req, res) => {
         }
     } catch (err) {
         console.error("Error creating Meta template:", err);
+        res.status(500).json({ success: false, error: "Internal server error" });
+    }
+});
+
+// POST /api/whatsapp-cloud/templates/sync - Refresh Meta approval status for all
+// linked templates. Meta approves asynchronously (minutes to hours), so a template
+// submitted as PENDING only becomes sendable after a sync.
+router.post("/templates/sync", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ success: false, error: "Missing shop parameter" });
+
+        const merchant = await Merchant.findOne({ shopDomain });
+        if (!merchant) return res.status(404).json({ success: false, error: "Merchant not found" });
+
+        const remote = await whatsappCloudService.getMessageTemplates(shopDomain);
+        if (!remote.success) {
+            return res.status(400).json({ success: false, error: remote.error });
+        }
+
+        // Index Meta's templates by name+language.
+        const byKey = new Map();
+        for (const t of remote.templates || []) {
+            byKey.set(`${t.name}::${t.language}`, t);
+        }
+
+        const locals = await Template.find({ merchant: merchant._id, metaTemplateName: { $nin: [null, ""] } });
+
+        let updated = 0;
+        const results = [];
+
+        for (const local of locals) {
+            const match =
+                byKey.get(`${local.metaTemplateName}::${local.metaLanguage}`) ||
+                (remote.templates || []).find((t) => t.name === local.metaTemplateName);
+
+            if (!match) {
+                // Deleted in Meta - stop treating it as sendable.
+                if (local.metaStatus !== "NONE") {
+                    local.metaStatus = "NONE";
+                    local.metaSyncedAt = new Date();
+                    await local.save();
+                    updated++;
+                }
+                results.push({ name: local.name, metaTemplateName: local.metaTemplateName, status: "NOT_FOUND_IN_META" });
+                continue;
+            }
+
+            if (local.metaStatus !== match.status || local.metaLanguage !== match.language) {
+                local.metaStatus = match.status;
+                local.metaLanguage = match.language;
+                local.metaRejectedReason = match.rejected_reason || null;
+                local.metaSyncedAt = new Date();
+                await local.save();
+                updated++;
+            }
+
+            results.push({
+                name: local.name,
+                metaTemplateName: local.metaTemplateName,
+                status: match.status,
+                rejectedReason: match.rejected_reason || null,
+            });
+        }
+
+        res.json({
+            success: true,
+            updated,
+            approved: results.filter((r) => r.status === "APPROVED").length,
+            templates: results,
+        });
+    } catch (err) {
+        console.error("Error syncing Meta template status:", err);
         res.status(500).json({ success: false, error: "Internal server error" });
     }
 });
