@@ -128,20 +128,70 @@ class WhatsAppCloudService {
      */
     async autoDiscoverWabaCredentials(accessToken) {
         try {
-            console.log("[Meta Auto-Discovery] Discovering WABA accounts for merchant token...");
-            const wabaRes = await axios.get(`${this.apiUrl}/me/whatsapp_business_accounts`, {
-                params: { access_token: accessToken }
-            });
+            const appId = process.env.META_APP_ID || "1031248766177799";
+            const appSecret = process.env.META_APP_SECRET || process.env.SHOPIFY_API_SECRET || "";
+            let wabaId = null;
 
-            const wabaList = wabaRes.data?.data || [];
-            if (wabaList.length === 0) {
-                console.warn("[Meta Auto-Discovery] No WABA accounts found for access token");
+            console.log("[Meta Auto-Discovery] Inspecting token via debug_token...");
+            try {
+                const appAccessToken = `${appId}|${appSecret}`;
+                const debugRes = await axios.get(`${this.apiUrl}/debug_token`, {
+                    params: {
+                        input_token: accessToken,
+                        access_token: appAccessToken
+                    }
+                });
+
+                const granularScopes = debugRes.data?.data?.granular_scopes || [];
+                for (const scopeObj of granularScopes) {
+                    if (scopeObj.target_ids && scopeObj.target_ids.length > 0) {
+                        wabaId = scopeObj.target_ids[0];
+                        console.log(`[Meta Auto-Discovery] Found WABA ID ${wabaId} from token target_ids`);
+                        break;
+                    }
+                }
+            } catch (debugErr) {
+                console.warn("[Meta Auto-Discovery] debug_token notice:", debugErr.response?.data?.error?.message || debugErr.message);
+            }
+
+            // Fallback 1: Query /me/whatsapp_business_accounts
+            if (!wabaId) {
+                try {
+                    const wabaRes = await axios.get(`${this.apiUrl}/me/whatsapp_business_accounts`, {
+                        params: { access_token: accessToken }
+                    });
+                    const wabaList = wabaRes.data?.data || [];
+                    if (wabaList.length > 0) {
+                        wabaId = wabaList[0].id;
+                        console.log(`[Meta Auto-Discovery] Found WABA ID ${wabaId} from /me/whatsapp_business_accounts`);
+                    }
+                } catch (wabaErr) {
+                    console.warn("[Meta Auto-Discovery] /me/whatsapp_business_accounts notice:", wabaErr.response?.data?.error?.message || wabaErr.message);
+                }
+            }
+
+            // Fallback 2: Query /me/client_whatsapp_business_accounts
+            if (!wabaId) {
+                try {
+                    const clientWabaRes = await axios.get(`${this.apiUrl}/me/client_whatsapp_business_accounts`, {
+                        params: { access_token: accessToken }
+                    });
+                    const clientWabaList = clientWabaRes.data?.data || [];
+                    if (clientWabaList.length > 0) {
+                        wabaId = clientWabaList[0].id;
+                        console.log(`[Meta Auto-Discovery] Found WABA ID ${wabaId} from /me/client_whatsapp_business_accounts`);
+                    }
+                } catch (cErr) {
+                    // Ignore fallback notice
+                }
+            }
+
+            if (!wabaId) {
+                console.warn("[Meta Auto-Discovery] Could not discover WABA ID for access token");
                 return { wabaId: null, phoneNumberId: null };
             }
 
-            const wabaId = wabaList[0].id;
-
-            console.log(`[Meta Auto-Discovery] Found WABA ${wabaId}. Discovering phone numbers...`);
+            console.log(`[Meta Auto-Discovery] Querying phone numbers under WABA ${wabaId}...`);
             const phoneRes = await axios.get(`${this.apiUrl}/${wabaId}/phone_numbers`, {
                 params: { access_token: accessToken }
             });

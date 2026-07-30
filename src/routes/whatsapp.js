@@ -210,7 +210,18 @@ router.post("/embedded-signup", async (req, res) => {
         resolvedPhoneId = resolvedPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
         resolvedWabaId = resolvedWabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
 
+        if (!resolvedPhoneId || resolvedPhoneId === "undefined") {
+            return res.status(400).json({
+                error: "Could not locate a registered WhatsApp Phone Number ID for this Meta account. Please verify that a phone number is registered in your Meta WhatsApp Manager."
+            });
+        }
+
         const verifyRes = await whatsappCloudService.verifyCredentials(resolvedPhoneId, activeAccessToken);
+        if (!verifyRes.success) {
+            return res.status(400).json({
+                error: `Meta Phone Number Verification Failed: ${verifyRes.error}`
+            });
+        }
 
         const displayPhone = verifyRes.data?.display_phone_number || "Connected Meta Phone";
 
