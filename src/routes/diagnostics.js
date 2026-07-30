@@ -105,6 +105,9 @@ router.get("/", async (req, res) => {
         const merchant = await Merchant.findOne({ shopDomain: shop });
         const whatsappSession = await WhatsAppSession.findOne({ shopDomain: shop });
 
+        const automations = await AutomationSetting.find({ shopDomain: shop }).select('type enabled');
+        const recentLogs = merchant ? await ActivityLog.find({ merchant: merchant._id }).sort({ createdAt: -1 }).limit(5).select('type orderId customerPhone message errorMessage createdAt') : [];
+
         res.json({
             shop,
             merchant: {
@@ -126,6 +129,8 @@ router.get("/", async (req, res) => {
                     phoneNumber: whatsappSession?.phoneNumber
                 }
             },
+            automations,
+            recentLogs,
             counts: {
                 activityLogs: await ActivityLog.countDocuments(merchant ? { merchant: merchant._id } : {}),
                 automationStats: await AutomationStat.countDocuments({ shopDomain: shop })
