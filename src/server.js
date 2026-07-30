@@ -46,7 +46,16 @@ const recoverStuckActivities = async () => {
 
 const app = express();
 
-// Middleware
+// Global CORS Middleware (Robust support for Vercel serverless & Shopify iframe requests)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-shop-domain, x-shopify-shop-domain");
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  next();
+});
 app.use(cors());
 app.use(express.json({
   limit: '50mb',
