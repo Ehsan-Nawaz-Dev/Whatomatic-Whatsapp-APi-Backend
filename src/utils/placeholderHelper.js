@@ -1,5 +1,11 @@
-export const replacePlaceholders = (template, data) => {
-    if (!template) return "";
+/**
+ * Builds the {{placeholder}} -> value map for an order.
+ *
+ * Exported separately from replacePlaceholders so Meta template sends can resolve
+ * variables individually: an approved Meta template uses positional {{1}}, {{2}}
+ * parameters, so we need each value on its own rather than one rendered string.
+ */
+export const buildPlaceholderMap = (data) => {
     const { order, merchant } = data;
     const findValue = (values) => values.find(v => v !== null && v !== undefined && v !== "") || "";
 
@@ -130,6 +136,17 @@ export const replacePlaceholders = (template, data) => {
         "{{courier}}": courier,
         "{{courier_name}}": courier
     };
+
+    return extendedPlaceholders;
+};
+
+export const replacePlaceholders = (template, data) => {
+    if (!template) return "";
+
+    const extendedPlaceholders = buildPlaceholderMap(data);
+    const trackingLink = extendedPlaceholders["{{tracking_link}}"];
+    const trackingNumber = extendedPlaceholders["{{tracking_number}}"];
+    const courier = extendedPlaceholders["{{courier}}"];
 
     let message = template;
 

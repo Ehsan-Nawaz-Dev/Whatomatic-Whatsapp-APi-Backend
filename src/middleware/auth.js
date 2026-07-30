@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "f89bab1b3e9044eae648188ba2712eec";
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
 
 /**
  * Middleware to verify Shopify Session Token (JWT)
@@ -15,9 +15,10 @@ export const verifySessionToken = (req, res, next) => {
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
         // Allow public config endpoint or requests with shop query param / header
-        if (req.path === "/config" || req.path.endsWith("/config") || req.query.shop || req.headers["x-shop-domain"]) {
-            if (req.query.shop) {
-                req.shopifyShop = req.query.shop.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+        const fallbackShop = req.query.shop || req.headers["x-shop-domain"];
+        if (req.path === "/config" || req.path.endsWith("/config") || fallbackShop) {
+            if (fallbackShop) {
+                req.shopifyShop = String(fallbackShop).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
             }
             return next();
         }

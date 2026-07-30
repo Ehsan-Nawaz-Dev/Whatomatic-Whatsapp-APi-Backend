@@ -15,12 +15,22 @@ const getShopDomain = (req) => {
     return shop.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
 };
 
-// GET /api/whatsapp/config - Get dynamic Meta App ID configuration
+// GET /api/whatsapp/config - Meta App configuration for the Embedded Signup widget.
+// Served from configuration only; hardcoded IDs meant a misconfigured deploy pointed
+// merchants at a different Meta app instead of surfacing the problem.
 router.get("/config", (req, res) => {
-    res.json({
-        metaAppId: process.env.META_APP_ID || "1031248766177799",
-        metaConfigId: process.env.META_CONFIG_ID || "1981964775839147"
-    });
+    const { appId, configId } = whatsappCloudService.getAppConfig();
+
+    if (!appId || !configId) {
+        console.error("[WhatsApp Config] META_APP_ID / META_CONFIG_ID are not configured.");
+        return res.status(503).json({
+            metaAppId: "",
+            metaConfigId: "",
+            error: "WhatsApp signup is not configured on this server. Please contact support."
+        });
+    }
+
+    res.json({ metaAppId: appId, metaConfigId: configId });
 });
 
 // GET /api/whatsapp/status - Get connection status
@@ -37,9 +47,7 @@ router.get("/status", async (req, res) => {
                 connected: false,
                 phoneNumber: "",
                 deviceName: "Meta Cloud API",
-                status: "disconnected",
-                dailyUsage: merchant?.dailyUsage || 0,
-                dailyLimit: merchant?.dailyLimit || 1000
+                status: "disconnected"
             });
         }
 
@@ -71,29 +79,100 @@ router.get("/status", async (req, res) => {
                 { upsert: true, new: true }
             );
 
+            // platform_type CLOUD_API means the number is registered for messaging.
+            // Without registration, sends fail with "(#133010) Account not registered".
+            const registered = merchant.metaRegistered || verifyRes.data.platform_type === "CLOUD_API";
+
             return res.json({
                 connected: true,
                 phoneNumber: displayPhone,
                 deviceName: "Meta Cloud API",
                 status: "connected",
                 qualityRating: qualityRating,
-                dailyUsage: merchant.dailyUsage || 0,
-                dailyLimit: merchant.dailyLimit || 1000
-            });
-        } else {
-            return res.json({
-                connected: false,
-                phoneNumber: merchant.metaPhoneDisplay || "",
-                deviceName: "Meta Cloud API",
-                status: "error",
-                errorMessage: verifyRes.error,
-                dailyUsage: merchant.dailyUsage || 0,
-                dailyLimit: merchant.dailyLimit || 1000
+                registered
             });
         }
+
+        // Verification failed. Only a genuinely dead token (expired/revoked) means the
+        // merchant is disconnected — a Graph timeout or 5xx must not tear down a
+        // working connection, which is what made connections "auto close" at random.
+        if (!verifyRes.authError) {
+            console.warn(`[WhatsApp Status] Transient Meta verification failure for ${shopDomain}: ${verifyRes.error}. Reporting last-known-good state.`);
+            return res.json({
+                connected: session?.isConnected !== false,
+                phoneNumber: merchant.metaPhoneDisplay || session?.displayPhoneNumber || "",
+                deviceName: "Meta Cloud API",
+                status: session?.isConnected !== false ? "connected" : "disconnected",
+                qualityRating: session?.qualityRating,
+                degraded: true,
+                errorMessage: null
+            });
+        }
+
+        // Token really is dead — the merchant must reconnect.
+        await WhatsAppSession.findOneAndUpdate(
+            { shopDomain },
+            { isConnected: false, status: "error", errorMessage: verifyRes.error },
+            { upsert: true }
+        );
+
+        return res.json({
+            connected: false,
+            phoneNumber: merchant.metaPhoneDisplay || "",
+            deviceName: "Meta Cloud API",
+            status: "error",
+            errorMessage: `${verifyRes.error} — please reconnect your WhatsApp Business account.`,
+            requiresReconnect: true
+        });
     } catch (err) {
         console.error("Error fetching Meta WhatsApp status", err);
         res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// POST /api/whatsapp/register - Register an already-connected number for Cloud API messaging
+// Recovery path for merchants who connected before registration was wired in and are
+// hitting "(#133010) Account not registered" on every send.
+router.post("/register", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ error: "Missing shop parameter" });
+
+        const merchant = await Merchant.findOne({ shopDomain });
+        if (!merchant?.metaPhoneNumberId || !merchant?.metaAccessToken) {
+            return res.status(400).json({ error: "No Meta WhatsApp account is connected for this shop" });
+        }
+
+        const pin = req.body?.pin || merchant.metaRegistrationPin;
+        const regRes = await whatsappCloudService.registerPhoneNumber(
+            merchant.metaPhoneNumberId,
+            merchant.metaAccessToken,
+            pin
+        );
+
+        if (!regRes.success) {
+            return res.status(400).json({
+                success: false,
+                error: regRes.error,
+                needsPin: !!regRes.needsPin
+            });
+        }
+
+        await Merchant.updateOne(
+            { shopDomain },
+            { $set: { metaRegistered: true, metaRegisteredAt: new Date(), metaRegistrationPin: regRes.pin } }
+        );
+
+        res.json({
+            success: true,
+            alreadyRegistered: !!regRes.alreadyRegistered,
+            message: regRes.alreadyRegistered
+                ? "This number was already registered for Cloud API messaging."
+                : "WhatsApp number registered for Cloud API messaging. Messages can now be sent."
+        });
+    } catch (err) {
+        console.error("Error registering Meta phone number", err);
+        res.status(500).json({ error: err.message || "Internal server error" });
     }
 });
 
@@ -120,6 +199,13 @@ router.post("/credentials", async (req, res) => {
 
         const displayPhone = verifyRes.data.display_phone_number;
 
+        // Register for Cloud API messaging (see embedded-signup) — without it sends
+        // fail with "(#133010) Account not registered".
+        const regRes = await whatsappCloudService.registerPhoneNumber(metaPhoneNumberId, metaAccessToken, req.body.registrationPin);
+        if (!regRes.success) {
+            console.warn(`[Credentials] Phone registration notice for ${shopDomain}: ${regRes.error}`);
+        }
+
         // Save to Merchant DB
         const updatedMerchant = await Merchant.findOneAndUpdate(
             { shopDomain },
@@ -128,10 +214,13 @@ router.post("/credentials", async (req, res) => {
                     metaPhoneNumberId,
                     metaWabaId,
                     metaAccessToken,
-                    metaWebhookVerifyToken: metaWebhookVerifyToken || process.env.WHATSAPP_VERIFY_TOKEN || "whatflow_secure_token",
+                    metaWebhookVerifyToken: metaWebhookVerifyToken || whatsappCloudService.generateVerifyToken(),
                     metaPhoneDisplay: displayPhone,
                     whatsappNumber: displayPhone,
-                    whatsappProvider: "cloud"
+                    whatsappProvider: "cloud",
+                    metaRegistered: !!regRes.success,
+                    metaRegisteredAt: regRes.success ? new Date() : null,
+                    metaRegistrationPin: regRes.pin || null
                 }
             },
             { new: true, upsert: true }
@@ -174,27 +263,53 @@ router.post("/embedded-signup", async (req, res) => {
 
         const { code, wabaId, phoneNumberId, accessToken: directAccessToken, redirectUri } = req.body;
 
-        let activeAccessToken = directAccessToken;
+        // ALWAYS prefer exchanging the authorization code.
+        //
+        // The frontend sends both `code` and `accessToken`. The `accessToken` from
+        // FB.login is a SHORT-LIVED browser token (~1-2h) - storing it is why merchant
+        // connections "auto closed" a couple of hours after a successful signup. Only
+        // the code exchange yields the long-lived business token we can keep using.
+        let activeAccessToken = null;
+        let tokenSource = "none";
 
-        if (code && !activeAccessToken) {
+        if (code) {
             const tokenRes = await whatsappCloudService.exchangeEmbeddedCode(code, redirectUri);
             if (tokenRes.success) {
                 activeAccessToken = tokenRes.accessToken;
+                tokenSource = "code_exchange";
             } else {
-
                 console.warn("[Embedded Signup] Token exchange failed:", tokenRes.error);
-                activeAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-                if (!activeAccessToken) {
-                    return res.status(400).json({ 
-                        error: `Meta Token Exchange failed: ${tokenRes.error}` 
-                    });
-                }
             }
         }
 
-        if (!activeAccessToken) {
-            return res.status(400).json({ error: "Failed to resolve Meta access token from signup flow" });
+        // Fall back to the short-lived browser token only if the exchange failed.
+        // It still works right now, and the long-lived upgrade below usually rescues it.
+        if (!activeAccessToken && directAccessToken) {
+            console.warn("[Embedded Signup] Falling back to the short-lived FB.login token. Check META_APP_ID / META_APP_SECRET - this token will expire.");
+            activeAccessToken = directAccessToken;
+            tokenSource = "fb_login_short_lived";
         }
+
+        // Deliberately no shared-env-token fallback: handing a merchant the vendor's
+        // WHATSAPP_ACCESS_TOKEN makes every such merchant send through one number and
+        // makes them all disconnect together when that token expires.
+        if (!activeAccessToken) {
+            return res.status(400).json({
+                error: "Could not obtain a Meta access token from the signup flow. Please try connecting again."
+            });
+        }
+
+        // Upgrade to a long-lived token (~60 days, often non-expiring for business
+        // integrations) so the connection survives past the browser session.
+        let tokenExpiresAt = null;
+        const longLived = await whatsappCloudService.getLongLivedToken(activeAccessToken);
+        if (longLived.success) {
+            activeAccessToken = longLived.accessToken;
+            tokenExpiresAt = longLived.expiresAt;
+            tokenSource += "+long_lived";
+        }
+
+        console.log(`[Embedded Signup] Token resolved for ${shopDomain} via: ${tokenSource}`);
 
         let resolvedPhoneId = phoneNumberId;
         let resolvedWabaId = wabaId;
@@ -206,13 +321,12 @@ router.post("/embedded-signup", async (req, res) => {
             if (!resolvedWabaId && discovered.wabaId) resolvedWabaId = discovered.wabaId;
         }
 
-        // Final fallback to environment variables
-        resolvedPhoneId = resolvedPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
-        resolvedWabaId = resolvedWabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
-
+        // No environment fallback here on purpose. Attaching the vendor's own
+        // WHATSAPP_PHONE_NUMBER_ID to a merchant who failed discovery would make that
+        // merchant send from - and receive replies on - a number they do not own.
         if (!resolvedPhoneId || resolvedPhoneId === "undefined") {
             return res.status(400).json({
-                error: "Could not locate a registered WhatsApp Phone Number ID for this Meta account. Please verify that a phone number is registered in your Meta WhatsApp Manager."
+                error: "Could not locate a WhatsApp phone number on your Meta account. Please add and verify a phone number in Meta WhatsApp Manager, then connect again."
             });
         }
 
@@ -229,6 +343,14 @@ router.post("/embedded-signup", async (req, res) => {
             await whatsappCloudService.subscribeWabaWebhooks(resolvedWabaId, activeAccessToken);
         }
 
+        // Register the number for Cloud API messaging. Embedded Signup attaches the
+        // number to the WABA but does not register it, so without this every send
+        // fails with "(#133010) Account not registered".
+        const regRes = await whatsappCloudService.registerPhoneNumber(resolvedPhoneId, activeAccessToken);
+        if (!regRes.success) {
+            console.warn(`[Embedded Signup] Phone registration notice for ${shopDomain}: ${regRes.error}`);
+        }
+
         const updatedMerchant = await Merchant.findOneAndUpdate(
             { shopDomain },
             {
@@ -236,10 +358,14 @@ router.post("/embedded-signup", async (req, res) => {
                     metaPhoneNumberId: resolvedPhoneId,
                     metaWabaId: resolvedWabaId,
                     metaAccessToken: activeAccessToken,
-                    metaWebhookVerifyToken: process.env.WHATSAPP_VERIFY_TOKEN || "whatflow_secure_token",
+                    metaTokenExpiresAt: tokenExpiresAt,
+                    metaWebhookVerifyToken: whatsappCloudService.generateVerifyToken(),
                     metaPhoneDisplay: displayPhone,
                     whatsappNumber: displayPhone,
-                    whatsappProvider: "cloud"
+                    whatsappProvider: "cloud",
+                    metaRegistered: !!regRes.success,
+                    metaRegisteredAt: regRes.success ? new Date() : null,
+                    metaRegistrationPin: regRes.pin || null
                 }
             },
             { new: true, upsert: true }
