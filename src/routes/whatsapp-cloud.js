@@ -218,7 +218,14 @@ router.get("/webhooks", (req, res) => {
         const token = req.query["hub.verify_token"];
         const challenge = req.query["hub.challenge"];
 
-        const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || "whatflow_secure_token";
+        // App-level token, configuration only. A hardcoded default is public knowledge
+        // and would let anyone pass Meta's webhook verification challenge.
+        const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+
+        if (!VERIFY_TOKEN) {
+            console.error("[Meta Webhook] WHATSAPP_VERIFY_TOKEN is not configured - refusing verification.");
+            return res.status(500).json({ error: "Webhook verify token not configured" });
+        }
 
         if (mode === "subscribe" && token === VERIFY_TOKEN) {
             console.log("[Meta Webhook] Verified successfully!");
@@ -242,11 +249,14 @@ router.post("/webhooks", async (req, res) => {
         if (result.success && result.isMessage) {
             const { messageId, from, text, phoneNumberId, contactName, buttonReply } = result.data;
 
-            // Find merchant by metaPhoneNumberId
-            let merchant = await Merchant.findOne({ metaPhoneNumberId: phoneNumberId });
+            // Route strictly by the phone number id Meta reported. The previous
+            // "fall back to any active merchant" behaviour attributed one store's
+            // customer replies to an unrelated store - confirming/cancelling the
+            // wrong orders and tagging the wrong Shopify shop.
+            const merchant = await Merchant.findOne({ metaPhoneNumberId: phoneNumberId });
             if (!merchant) {
-                // Fallback to single merchant if available
-                merchant = await Merchant.findOne({ isActive: true });
+                console.warn(`[Meta Webhook] No merchant owns phone_number_id ${phoneNumberId}. Ignoring inbound message.`);
+                return res.status(200).json({ success: true, skipped: true, reason: "unknown_phone_number_id" });
             }
 
             if (merchant) {

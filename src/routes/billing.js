@@ -6,7 +6,7 @@ import { checkAndResetBillingCycle } from '../services/billingService.js';
 
 const router = Router();
 const SHOPIFY_APP_URL = (process.env.SHOPIFY_APP_URL || "http://localhost:5000").replace(/\/$/, "");
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "f89bab1b3e9044eae648188ba2712eec";
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
 const API_VERSION = "2025-01";
 
 // ============================================================

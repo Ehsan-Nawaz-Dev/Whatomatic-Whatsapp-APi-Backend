@@ -25,6 +25,12 @@ const MerchantSchema = new mongoose.Schema(
     metaAccessToken: { type: String },
     metaWebhookVerifyToken: { type: String },
     metaPhoneDisplay: { type: String },
+    // Cloud API phone registration (required before any message can be sent)
+    metaRegistrationPin: { type: String },
+    metaRegistered: { type: Boolean, default: false },
+    metaRegisteredAt: { type: Date },
+    // Long-lived token bookkeeping (short-lived tokens are why connections "auto close")
+    metaTokenExpiresAt: { type: Date },
 
     // Tag Settings
     pendingConfirmTag: { type: String, default: '🕒 Pending Confirmation' },
@@ -62,9 +68,6 @@ const MerchantSchema = new mongoose.Schema(
     trialUsage: { type: Number, default: 0 },
     trialLimit: { type: Number, default: 10 },
 
-    // Daily Safety Limits
-    dailyLimit: { type: Number, default: 250 }, // Default safe-ish limit for unofficial connections
-    dailyUsage: { type: Number, default: 0 },
     lastUsageDate: { type: String }, // Stored as YYYY-MM-DD
 
     // Status
