@@ -45,21 +45,12 @@ router.get("/", async (req, res) => {
       shopDomain: { $regex: new RegExp(`^${shop}$`, "i") }
     });
 
-    if (merchant && merchant.shopifyAccessToken) {
-      try {
-        // Validate token by fetching shop info (very fast)
-        await axios.get(`https://${shop}/admin/api/2024-01/shop.json`, {
-          headers: { "X-Shopify-Access-Token": merchant.shopifyAccessToken }
-        });
-
-        console.log(`[SmartAuth] Skip OAuth: Token is VALID for ${shop}. Redirecting...`);
-        const targetUrl = new URL(FRONTEND_APP_URL);
-        targetUrl.searchParams.set("shop", shop);
-        if (host) targetUrl.searchParams.set("host", host);
-        return res.redirect(targetUrl.toString());
-      } catch (tokenErr) {
-        console.warn(`[SmartAuth] Token found but INVALID for ${shop}: ${tokenErr.message}. Forcing OAuth.`);
-      }
+    if (merchant && merchant.shopifyAccessToken && !merchant.needsReauth) {
+      console.log(`[SmartAuth] Token found in database for ${shop}. Skipping OAuth redirect.`);
+      const targetUrl = new URL(FRONTEND_APP_URL);
+      targetUrl.searchParams.set("shop", shop);
+      if (host) targetUrl.searchParams.set("host", host);
+      return res.redirect(targetUrl.toString());
     }
   } catch (err) {
     console.error(`[SmartAuth] Error during check: ${err.message}`);
