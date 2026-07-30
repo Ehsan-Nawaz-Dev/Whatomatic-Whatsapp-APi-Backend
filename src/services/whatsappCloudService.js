@@ -134,6 +134,14 @@ class WhatsAppCloudService {
                 };
             case 133010:
                 return { reason: "not_registered", message: "The phone number is not registered for Cloud API messaging." };
+            case 131030:
+                return {
+                    reason: "recipient_not_in_test_list",
+                    message:
+                        "Meta App is using a Test Phone Number or is in Development Mode. " +
+                        "Meta only allows sending messages to numbers added to the 'To' test recipient list in Meta Developer Portal (API Setup). " +
+                        "To send to any customer number, add a real business phone number in Meta WhatsApp Manager and publish your app.",
+                };
             case 131031:
                 return { reason: "account_locked", message: "This WhatsApp Business Account has been restricted by Meta." };
             case 131052:
