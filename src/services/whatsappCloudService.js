@@ -121,6 +121,8 @@ class WhatsAppCloudService {
                 error: error.message
             };
         }
+    }
+
     /**
      * Auto-discovers merchant WABA ID and Phone Number ID directly from Meta Graph API using access token
      */
