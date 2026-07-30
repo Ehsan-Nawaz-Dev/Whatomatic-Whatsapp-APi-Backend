@@ -398,37 +398,34 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
             }
         }
 
-        res.status(200).send('ok'); // Tell Shopify we got it
-
-        // Processing continues in the background
-        (async () => {
+        // Await processing in serverless environment to prevent Vercel process freeze
+        try {
+            // 1. Trigger Admin Alert (admin-order-alert) when order is first received
             try {
-                // 1. Trigger Admin Alert (admin-order-alert) when order is first received
-                try {
-                    const adminSetting = await AutomationSetting.findOne({ shopDomain, type: "admin-order-alert" });
-                    const updatedMerchant = await Merchant.findOne({ shopDomain });
-                    if (adminSetting?.enabled && updatedMerchant?.adminPhoneNumber) {
-                        console.log(`[ShopifyWebhook] Admin Order Alert enabled. Preparing to send...`);
-                        const adminTemplate = await Template.findOne({ merchant: updatedMerchant._id, event: "admin-order-alert" });
-                        if (adminTemplate) {
-                            let fullOrderData = order;
-                            if (updatedMerchant.shopifyAccessToken && orderId) {
-                                try {
-                                    const apiOrderData = await shopifyService.getOrder(shopDomain, updatedMerchant.shopifyAccessToken, orderId);
-                                    if (apiOrderData) fullOrderData = apiOrderData;
-                                } catch (err) {
-                                    console.warn(`[ShopifyWebhook] Admin alert: failed to fetch order from API:`, err.message);
-                                }
+                const adminSetting = await AutomationSetting.findOne({ shopDomain, type: "admin-order-alert" });
+                const updatedMerchant = await Merchant.findOne({ shopDomain });
+                if (adminSetting?.enabled && updatedMerchant?.adminPhoneNumber) {
+                    console.log(`[ShopifyWebhook] Admin Order Alert enabled. Preparing to send...`);
+                    const adminTemplate = await Template.findOne({ merchant: updatedMerchant._id, event: "admin-order-alert" });
+                    if (adminTemplate) {
+                        let fullOrderData = order;
+                        if (updatedMerchant.shopifyAccessToken && orderId) {
+                            try {
+                                const apiOrderData = await shopifyService.getOrder(shopDomain, updatedMerchant.shopifyAccessToken, orderId);
+                                if (apiOrderData) fullOrderData = apiOrderData;
+                            } catch (err) {
+                                console.warn(`[ShopifyWebhook] Admin alert: failed to fetch order from API:`, err.message);
                             }
-                            let adminMsg = replacePlaceholders(adminTemplate.message, { order: fullOrderData, merchant: updatedMerchant });
-                            console.log(`[ShopifyWebhook] Sending Admin Order Alert to ${updatedMerchant.adminPhoneNumber}`);
-                            await whatsappCloudService.sendTextMessage(shopDomain, updatedMerchant.adminPhoneNumber, adminMsg);
-                            await automationService.trackSent(shopDomain, "admin-order-alert");
                         }
+                        let adminMsg = replacePlaceholders(adminTemplate.message, { order: fullOrderData, merchant: updatedMerchant });
+                        console.log(`[ShopifyWebhook] Sending Admin Order Alert to ${updatedMerchant.adminPhoneNumber}`);
+                        await whatsappCloudService.sendTextMessage(shopDomain, updatedMerchant.adminPhoneNumber, adminMsg);
+                        await automationService.trackSent(shopDomain, "admin-order-alert");
                     }
-                } catch (adminErr) {
-                    console.error("[ShopifyWebhook] Admin order alert error:", adminErr);
                 }
+            } catch (adminErr) {
+                console.error("[ShopifyWebhook] Admin order alert error:", adminErr);
+            }
 
                 // Trigger 2: Customer Confirmation (Customer is notified IMMEDIATELY)
                 const orderConfirmationSetting = await AutomationSetting.findOne({ shopDomain, type: "order-confirmation" });
@@ -674,20 +671,19 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
                         activity.type = 'confirmed';
                         activity.message = 'Automation Disabled (Admin Alert Sent) ✅';
                         await activity.save();
-                    }
-                }
-            } catch (err) {
-                // 5. UPDATE DASHBOARD TO RED (FAILED)
-                console.error(`Webhook Background Error for ${shopDomain}:`, err);
-                if (activity) {
-                    activity.type = 'failed';
-                    activity.message = 'Failed to send WhatsApp ❌';
-                    activity.errorMessage = err.message;
-                    await activity.save();
                 }
             }
-        })();
-        return;
+        } catch (err) {
+            // 5. UPDATE DASHBOARD TO RED (FAILED)
+            console.error(`Webhook Background Error for ${shopDomain}:`, err);
+            if (activity) {
+                activity.type = 'failed';
+                activity.message = 'Failed to send WhatsApp ❌';
+                activity.errorMessage = err.message;
+                await activity.save();
+            }
+        }
+        return res.status(200).send('ok');
     } else if (topic === "orders/cancelled") {
         const orderId = order.id?.toString() || (order.admin_graphql_api_id ? order.admin_graphql_api_id.split('/').pop() : null);
 
@@ -697,46 +693,42 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
         }
 
         await logEvent("cancelled", req, shopDomain);
-        res.status(200).send("ok");
+        try {
+            const cancelSetting = await AutomationSetting.findOne({ shopDomain, type: "cancellation" });
+            const cancelTemplate = await Template.findOne({ merchant: merchant._id, event: "orders/cancelled" });
 
-        (async () => {
-            try {
-                const cancelSetting = await AutomationSetting.findOne({ shopDomain, type: "cancellation" });
-                const cancelTemplate = await Template.findOne({ merchant: merchant._id, event: "orders/cancelled" });
-
-                if (!cancelSetting?.enabled || !cancelTemplate?.enabled) {
-                    console.log(`[ShopifyWebhook] Cancellation skipped: setting=${!!cancelSetting?.enabled}, template=${!!cancelTemplate?.enabled}`);
-                    return;
-                }
-
-                if (!customerPhoneFormatted) {
-                    console.warn(`[ShopifyWebhook] Cannot send cancellation: No phone number for ${orderNumber}`);
-                    return;
-                }
-
-                let cancelMsg = cancelTemplate.message;
-                cancelMsg = replacePlaceholders(cancelMsg, { order, merchant });
-                cancelMsg = cancelMsg.replace(/{{customer_name}}/g, customerName);
-
-                if (cancelTemplate?.sendingDelay && cancelTemplate.sendingDelay > 0) {
-                    console.log(`[ShopifyWebhook] Delaying cancellation message by ${cancelTemplate.sendingDelay} minutes...`);
-                    await new Promise(resolve => setTimeout(resolve, cancelTemplate.sendingDelay * 60 * 1000));
-                }
-
-                let result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, cancelTemplate, cancelMsg, buildPlaceholderMap({ order, merchant }));
-
-                if (result?.success) {
-                    if (merchant?.shopifyAccessToken && orderId) {
-                        await shopifyService.addOrderTag(shopDomain, merchant.shopifyAccessToken, orderId, merchant.orderCancelTag || "Order Cancelled", [merchant.pendingConfirmTag, merchant.orderConfirmTag]);
-                    }
-                } else {
-                    console.error(`[ShopifyWebhook] Failed to send cancellation message for order ${orderId}: ${result?.error || 'Unknown error'}`);
-                }
-            } catch (err) {
-                console.error(`[ShopifyWebhook] Error processing cancellation:`, err);
+            if (!cancelSetting?.enabled || !cancelTemplate?.enabled) {
+                console.log(`[ShopifyWebhook] Cancellation skipped: setting=${!!cancelSetting?.enabled}, template=${!!cancelTemplate?.enabled}`);
+                return res.status(200).send("ok");
             }
-        })();
-        return;
+
+            if (!customerPhoneFormatted) {
+                console.warn(`[ShopifyWebhook] Cannot send cancellation: No phone number for ${orderNumber}`);
+                return res.status(200).send("ok");
+            }
+
+            let cancelMsg = cancelTemplate.message;
+            cancelMsg = replacePlaceholders(cancelMsg, { order, merchant });
+            cancelMsg = cancelMsg.replace(/{{customer_name}}/g, customerName);
+
+            if (cancelTemplate?.sendingDelay && cancelTemplate.sendingDelay > 0) {
+                console.log(`[ShopifyWebhook] Delaying cancellation message by ${cancelTemplate.sendingDelay} minutes...`);
+                await new Promise(resolve => setTimeout(resolve, cancelTemplate.sendingDelay * 60 * 1000));
+            }
+
+            let result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, cancelTemplate, cancelMsg, buildPlaceholderMap({ order, merchant }));
+
+            if (result?.success) {
+                if (merchant?.shopifyAccessToken && orderId) {
+                    await shopifyService.addOrderTag(shopDomain, merchant.shopifyAccessToken, orderId, merchant.orderCancelTag || "Order Cancelled", [merchant.pendingConfirmTag, merchant.orderConfirmTag]);
+                }
+            } else {
+                console.error(`[ShopifyWebhook] Failed to send cancellation message for order ${orderId}: ${result?.error || 'Unknown error'}`);
+            }
+        } catch (err) {
+            console.error(`[ShopifyWebhook] Error processing cancellation:`, err);
+        }
+        return res.status(200).send("ok");
     } else if (topic === "checkouts/abandoned") {
         const orderId = order.id?.toString() || order.checkout_id?.toString();
 
@@ -747,95 +739,91 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
         }
 
         const activity = await logEvent("pending", req, shopDomain);
-        res.status(200).send("ok");
-
-        (async () => {
-            try {
-                const setting = await AutomationSetting.findOne({ shopDomain, type: "abandoned_cart" }) || await AutomationSetting.findOne({ shopDomain, type: "abandoned-cart" });
-                const abandonedTemplate = await Template.findOne({ merchant: merchant._id, event: "checkouts/abandoned" });
-                
-                if (!setting?.enabled || !abandonedTemplate?.enabled) {
-                    console.log(`[ShopifyWebhook] Abandoned Cart skipped: setting=${!!setting?.enabled}, template=${!!abandonedTemplate?.enabled}`);
-                    if (activity) {
-                        activity.type = 'confirmed'; // Skip as processed/ignored
-                        activity.message = `Skipped: Automation is disabled 🛑`;
-                        await activity.save();
-                    }
-                    return;
+        try {
+            const setting = await AutomationSetting.findOne({ shopDomain, type: "abandoned_cart" }) || await AutomationSetting.findOne({ shopDomain, type: "abandoned-cart" });
+            const abandonedTemplate = await Template.findOne({ merchant: merchant._id, event: "checkouts/abandoned" });
+            
+            if (!setting?.enabled || !abandonedTemplate?.enabled) {
+                console.log(`[ShopifyWebhook] Abandoned Cart skipped: setting=${!!setting?.enabled}, template=${!!abandonedTemplate?.enabled}`);
+                if (activity) {
+                    activity.type = 'confirmed'; // Skip as processed/ignored
+                    activity.message = `Skipped: Automation is disabled 🛑`;
+                    await activity.save();
                 }
+                return res.status(200).send("ok");
+            }
 
-                if (!customerPhoneFormatted) {
-                    console.warn(`[ShopifyWebhook] Abandoned checkout skipped: No phone number found.`);
-                    if (activity) {
-                        activity.type = 'failed';
-                        activity.message = 'Skipped: No phone number found 📵';
-                        await activity.save();
-                    }
-                    return;
+            if (!customerPhoneFormatted) {
+                console.warn(`[ShopifyWebhook] Abandoned checkout skipped: No phone number found.`);
+                if (activity) {
+                    activity.type = 'failed';
+                    activity.message = 'Skipped: No phone number found 📵';
+                    await activity.save();
                 }
+                return res.status(200).send("ok");
+            }
 
-                let abandonedMsg = abandonedTemplate.message;
-                abandonedMsg = replacePlaceholders(abandonedMsg, { order, merchant });
-                abandonedMsg = abandonedMsg.replace(/{{customer_name}}/g, customerName);
+            let abandonedMsg = abandonedTemplate.message;
+            abandonedMsg = replacePlaceholders(abandonedMsg, { order, merchant });
+            abandonedMsg = abandonedMsg.replace(/{{customer_name}}/g, customerName);
 
-                // Usage check for abandoned cart
-                const planConfig = await Plan.findOne({ id: merchant.plan || 'free' });
-                const currentLimit = planConfig ? planConfig.messageLimit : (merchant.trialLimit || 10);
-                if ((merchant.usage || 0) >= currentLimit) {
-                    if (merchant.shopifyUsageLineItemId && merchant.plan !== 'professional') {
-                        console.log(`[ShopifyWebhook] Auto-upgrade allowance for abandoned cart ${shopDomain}.`);
-                    } else {
-                        console.warn(`[ShopifyWebhook] Limit reached for ${shopDomain} (Abandoned Cart blocked)`);
-                        if (activity) {
-                            activity.type = 'failed';
-                            activity.message = `Limit Reached (${currentLimit} messages) 🛑`;
-                            await activity.save();
-                        }
-                        return;
-                    }
-                }
-
-                let result;
-
-                if (abandonedTemplate?.sendingDelay && abandonedTemplate.sendingDelay > 0) {
-                    console.log(`[ShopifyWebhook] Delaying abandoned cart message by ${abandonedTemplate.sendingDelay} minutes...`);
-                    await new Promise(resolve => setTimeout(resolve, abandonedTemplate.sendingDelay * 60 * 1000));
-                }
-
-                result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, abandonedTemplate, abandonedMsg, buildPlaceholderMap({ order, merchant }));
-
-                if (result?.success) {
-                    const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });
-                    import('../../services/billingService.js').then(({ checkAndChargeUsage }) => {
-                        checkAndChargeUsage(incMerchant);
-                    }).catch(err => console.error("Billing service error:", err));
-                    await automationService.trackSent(shopDomain, "abandoned_cart");
-                    
-                    if (activity) {
-                        activity.message = 'Cart Recovery Message Sent ✅';
-                        await activity.save();
-                    }
+            // Usage check for abandoned cart
+            const planConfig = await Plan.findOne({ id: merchant.plan || 'free' });
+            const currentLimit = planConfig ? planConfig.messageLimit : (merchant.trialLimit || 10);
+            if ((merchant.usage || 0) >= currentLimit) {
+                if (merchant.shopifyUsageLineItemId && merchant.plan !== 'professional') {
+                    console.log(`[ShopifyWebhook] Auto-upgrade allowance for abandoned cart ${shopDomain}.`);
                 } else {
-                    const errorMsg = result?.error || "Failed to send WhatsApp message (unknown error)";
-                    console.warn(`[ShopifyWebhook] WhatsApp Error for ${shopDomain}: ${errorMsg}`);
+                    console.warn(`[ShopifyWebhook] Limit reached for ${shopDomain} (Abandoned Cart blocked)`);
                     if (activity) {
                         activity.type = 'failed';
-                        activity.message = 'Failed to send WhatsApp ❌';
-                        activity.errorMessage = errorMsg;
+                        activity.message = `Limit Reached (${currentLimit} messages) 🛑`;
                         await activity.save();
                     }
+                    return res.status(200).send("ok");
                 }
-            } catch (err) {
-                console.error(`[ShopifyWebhook] Error processing abandoned cart for ${shopDomain}:`, err);
+            }
+
+            let result;
+
+            if (abandonedTemplate?.sendingDelay && abandonedTemplate.sendingDelay > 0) {
+                console.log(`[ShopifyWebhook] Delaying abandoned cart message by ${abandonedTemplate.sendingDelay} minutes...`);
+                await new Promise(resolve => setTimeout(resolve, abandonedTemplate.sendingDelay * 60 * 1000));
+            }
+
+            result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, abandonedTemplate, abandonedMsg, buildPlaceholderMap({ order, merchant }));
+
+            if (result?.success) {
+                const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });
+                import('../../services/billingService.js').then(({ checkAndChargeUsage }) => {
+                    checkAndChargeUsage(incMerchant);
+                }).catch(err => console.error("Billing service error:", err));
+                await automationService.trackSent(shopDomain, "abandoned_cart");
+                
+                if (activity) {
+                    activity.message = 'Cart Recovery Message Sent ✅';
+                    await activity.save();
+                }
+            } else {
+                const errorMsg = result?.error || "Failed to send WhatsApp message (unknown error)";
+                console.warn(`[ShopifyWebhook] WhatsApp Error for ${shopDomain}: ${errorMsg}`);
                 if (activity) {
                     activity.type = 'failed';
                     activity.message = 'Failed to send WhatsApp ❌';
-                    activity.errorMessage = err.message;
+                    activity.errorMessage = errorMsg;
                     await activity.save();
                 }
             }
-        })();
-        return;
+        } catch (err) {
+            console.error(`[ShopifyWebhook] Error processing abandoned cart for ${shopDomain}:`, err);
+            if (activity) {
+                activity.type = 'failed';
+                activity.message = 'Failed to send WhatsApp ❌';
+                activity.errorMessage = err.message;
+                await activity.save();
+            }
+        }
+        return res.status(200).send("ok");
     } else if (topic === "fulfillments/update" || topic === "fulfillments/create") {
         const orderId = order.order_id?.toString() || order.id?.toString();
 
@@ -850,61 +838,58 @@ router.post("/", verifyShopifyWebhook, async (req, res) => {
         }
 
         await logEvent(targetType, req, shopDomain, { orderForPlaceholders, customerPhone: customerPhoneFormatted, customerName, orderId });
-        res.status(200).send("ok");
 
-        (async () => {
-            try {
-                let setting = await AutomationSetting.findOne({ shopDomain, type: automationType });
-                if (!setting && !isDelivered) {
-                    setting = await AutomationSetting.findOne({ shopDomain, type: "shipment-update" });
-                }
-                const template = await Template.findOne({ merchant: merchant._id, event: templateEvent });
-
-                if (!setting?.enabled || !template?.enabled) {
-                    console.log(`[ShopifyWebhook] Fulfillment (${targetType}) skipped: setting=${!!setting?.enabled}, template=${!!template?.enabled}`);
-                    return;
-                }
-
-                if (!customerPhoneFormatted) {
-                    console.warn(`[ShopifyWebhook] Cannot send fulfillment (${targetType}): No phone number for ${orderNumber}`);
-                    return;
-                }
-
-                // Plan limit check
-                const planConfig = await Plan.findOne({ id: merchant.plan || 'free' });
-                const currentLimit = planConfig ? planConfig.messageLimit : (merchant.trialLimit || 10);
-                if ((merchant.usage || 0) >= currentLimit) {
-                    if (merchant.shopifyUsageLineItemId && merchant.plan !== 'professional') {
-                        console.log(`[ShopifyWebhook] Auto-upgrade allowance for fulfillment ${targetType} ${shopDomain}.`);
-                    } else {
-                        console.warn(`[ShopifyWebhook] Limit reached for ${shopDomain} (Fulfillment ${targetType} blocked)`);
-                        return;
-                    }
-                }
-
-                let fulfillmentMsg = template.message;
-                fulfillmentMsg = replacePlaceholders(fulfillmentMsg, { order: orderForPlaceholders, merchant });
-                fulfillmentMsg = fulfillmentMsg.replace(/{{customer_name}}/g, customerName);
-
-                if (template?.sendingDelay && template.sendingDelay > 0) {
-                    console.log(`[ShopifyWebhook] Delaying fulfillment (${targetType}) message by ${template.sendingDelay} minutes...`);
-                    await new Promise(resolve => setTimeout(resolve, template.sendingDelay * 60 * 1000));
-                }
-
-                const result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, template, fulfillmentMsg, buildPlaceholderMap({ order: orderForPlaceholders, merchant }));
-
-                if (result?.success) {
-                    const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });
-                    import('../../services/billingService.js').then(({ checkAndChargeUsage }) => {
-                        checkAndChargeUsage(incMerchant);
-                    }).catch(err => console.error("Billing service error:", err));
-                    await automationService.trackSent(shopDomain, automationType);
-                }
-            } catch (err) {
-                console.error(`[ShopifyWebhook] Error processing fulfillment (${targetType}):`, err);
+        try {
+            let setting = await AutomationSetting.findOne({ shopDomain, type: automationType });
+            if (!setting && !isDelivered) {
+                setting = await AutomationSetting.findOne({ shopDomain, type: "shipment-update" });
             }
-        })();
-        return;
+            const template = await Template.findOne({ merchant: merchant._id, event: templateEvent });
+
+            if (!setting?.enabled || !template?.enabled) {
+                console.log(`[ShopifyWebhook] Fulfillment (${targetType}) skipped: setting=${!!setting?.enabled}, template=${!!template?.enabled}`);
+                return res.status(200).send("ok");
+            }
+
+            if (!customerPhoneFormatted) {
+                console.warn(`[ShopifyWebhook] Cannot send fulfillment (${targetType}): No phone number for ${orderNumber}`);
+                return res.status(200).send("ok");
+            }
+
+            // Plan limit check
+            const planConfig = await Plan.findOne({ id: merchant.plan || 'free' });
+            const currentLimit = planConfig ? planConfig.messageLimit : (merchant.trialLimit || 10);
+            if ((merchant.usage || 0) >= currentLimit) {
+                if (merchant.shopifyUsageLineItemId && merchant.plan !== 'professional') {
+                    console.log(`[ShopifyWebhook] Auto-upgrade allowance for fulfillment ${targetType} ${shopDomain}.`);
+                } else {
+                    console.warn(`[ShopifyWebhook] Limit reached for ${shopDomain} (Fulfillment ${targetType} blocked)`);
+                    return res.status(200).send("ok");
+                }
+            }
+
+            let fulfillmentMsg = template.message;
+            fulfillmentMsg = replacePlaceholders(fulfillmentMsg, { order: orderForPlaceholders, merchant });
+            fulfillmentMsg = fulfillmentMsg.replace(/{{customer_name}}/g, customerName);
+
+            if (template?.sendingDelay && template.sendingDelay > 0) {
+                console.log(`[ShopifyWebhook] Delaying fulfillment (${targetType}) message by ${template.sendingDelay} minutes...`);
+                await new Promise(resolve => setTimeout(resolve, template.sendingDelay * 60 * 1000));
+            }
+
+            const result = await whatsappCloudService.sendAutomationMessage(shopDomain, customerPhoneFormatted, template, fulfillmentMsg, buildPlaceholderMap({ order: orderForPlaceholders, merchant }));
+
+            if (result?.success) {
+                const incMerchant = await Merchant.findOneAndUpdate({ shopDomain }, { $inc: { usage: 1, trialUsage: merchant.plan === 'trial' ? 1 : 0 } }, { new: true });
+                import('../../services/billingService.js').then(({ checkAndChargeUsage }) => {
+                    checkAndChargeUsage(incMerchant);
+                }).catch(err => console.error("Billing service error:", err));
+                await automationService.trackSent(shopDomain, automationType);
+            }
+        } catch (err) {
+            console.error(`[ShopifyWebhook] Error processing fulfillment (${targetType}):`, err);
+        }
+        return res.status(200).send("ok");
     } else if (topic === "orders/paid") {
         const revenue = parseFloat(req.body?.total_price || 0);
         await automationService.trackRecovered(shopDomain, revenue);

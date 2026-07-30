@@ -26,9 +26,9 @@ class WhatsAppCloudService {
     /** App-level Meta credentials, from configuration only. */
     getAppConfig() {
         return {
-            appId: process.env.META_APP_ID || "",
+            appId: process.env.META_APP_ID || "1031248766177799",
             appSecret: process.env.META_APP_SECRET || "",
-            configId: process.env.META_CONFIG_ID || "",
+            configId: process.env.META_CONFIG_ID || "1981964775839147",
         };
     }
 
