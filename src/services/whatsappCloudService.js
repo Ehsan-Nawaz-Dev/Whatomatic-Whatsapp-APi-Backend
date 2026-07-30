@@ -71,54 +71,58 @@ class WhatsAppCloudService {
     /**
      * Exchanges 1-Click Embedded Signup Authorization Code for Access Token
      */
+    /**
+     * Exchanges 1-Click Embedded Signup Authorization Code for Access Token
+     */
     async exchangeEmbeddedCode(code, redirectUri = "") {
         try {
             const appId = process.env.META_APP_ID || "1031248766177799";
             const appSecret = process.env.META_APP_SECRET || process.env.SHOPIFY_API_SECRET || "";
 
-            const params = {
-                client_id: appId,
-                client_secret: appSecret,
-                code: code
-            };
+            // Meta FB.login SDK generates codes without a redirect_uri parameter.
+            // We try sequential attempts to guarantee success for all SDK & OAuth popup flows.
+            const attempts = [
+                // Attempt 1: Standard FB.login SDK exchange (NO redirect_uri parameter)
+                { client_id: appId, client_secret: appSecret, code: code },
+                // Attempt 2: If redirectUri was explicitly specified in popup dialog window
+                ...(redirectUri ? [{ client_id: appId, client_secret: appSecret, code: code, redirect_uri: redirectUri }] : []),
+                // Attempt 3: Empty string redirect_uri
+                { client_id: appId, client_secret: appSecret, code: code, redirect_uri: "" }
+            ];
 
-            if (redirectUri) {
-                params.redirect_uri = redirectUri;
-            }
+            let lastError = null;
 
-            let response;
-            try {
-                response = await axios.get(`${this.apiUrl}/oauth/access_token`, { params });
-            } catch (err) {
-                const errMsg = err.response?.data?.error?.message || "";
-                if (errMsg.includes("redirect_uri") || err.response?.status === 400) {
-                    console.warn("[Meta Embedded Signup] Primary token exchange notice, trying fallback redirect_uri parameter...");
-                    // Try alternate redirect_uri variations (empty string vs provided redirectUri)
-                    const altParams = {
-                        client_id: appId,
-                        client_secret: appSecret,
-                        code: code,
-                        redirect_uri: redirectUri ? "" : (process.env.META_REDIRECT_URI || "")
-                    };
-                    response = await axios.get(`${this.apiUrl}/oauth/access_token`, { params: altParams });
-                } else {
-                    throw err;
+            for (const params of attempts) {
+                try {
+                    console.log(`[Meta Embedded Signup] Trying token exchange (redirect_uri: ${params.redirect_uri !== undefined ? JSON.stringify(params.redirect_uri) : 'omitted'})...`);
+                    const response = await axios.get(`${this.apiUrl}/oauth/access_token`, { params });
+                    if (response.data && response.data.access_token) {
+                        console.log("[Meta Embedded Signup] Token exchange successful!");
+                        return {
+                            success: true,
+                            accessToken: response.data.access_token,
+                            data: response.data
+                        };
+                    }
+                } catch (err) {
+                    lastError = err;
+                    console.warn(`[Meta Embedded Signup] Exchange attempt failed (redirect_uri: ${params.redirect_uri !== undefined ? JSON.stringify(params.redirect_uri) : 'omitted'}):`, err.response?.data?.error?.message || err.message);
                 }
             }
 
             return {
-                success: true,
-                accessToken: response.data.access_token,
-                data: response.data
+                success: false,
+                error: lastError?.response?.data?.error?.message || lastError?.message || "Token exchange failed"
             };
         } catch (error) {
-            console.error("[Meta Embedded Signup] Code exchange failed:", error.response?.data || error.message);
+            console.error("[Meta Embedded Signup] Unexpected error during code exchange:", error);
             return {
                 success: false,
-                error: error.response?.data?.error?.message || error.message
+                error: error.message
             };
         }
     }
+
 
 
     /**
