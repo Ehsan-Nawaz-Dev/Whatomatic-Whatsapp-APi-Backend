@@ -365,6 +365,140 @@ class WhatsAppCloudService {
     }
 
     /**
+     * Submit a new Message Template to Meta for approval
+     */
+    async createMessageTemplate(shopDomain, templateData) {
+        try {
+            const { wabaId, accessToken } = await this.getCredentials(shopDomain);
+            if (!wabaId || !accessToken) {
+                return { success: false, error: "WABA ID or Access Token missing for this shop" };
+            }
+
+            const { name, category, language = "en_US", components = [], bodyText, headerText, footerText, buttons, examples } = templateData;
+
+            if (!name || (!components.length && !bodyText)) {
+                return { success: false, error: "Template name and body text are required" };
+            }
+
+            const formattedName = name.toLowerCase().trim().replace(/[^a-z0-9_]/g, "_");
+
+            let formattedComponents = [...components];
+
+            if (formattedComponents.length === 0 && bodyText) {
+                const bodyComponent = {
+                    type: "BODY",
+                    text: bodyText
+                };
+
+                // Extract {{1}}, {{2}} placeholders for examples if provided
+                if (examples && Array.isArray(examples) && examples.length > 0) {
+                    bodyComponent.example = {
+                        body_text: [examples]
+                    };
+                }
+
+                formattedComponents.push(bodyComponent);
+
+                if (headerText) {
+                    formattedComponents.push({
+                        type: "HEADER",
+                        format: "TEXT",
+                        text: headerText
+                    });
+                }
+
+                if (footerText) {
+                    formattedComponents.push({
+                        type: "FOOTER",
+                        text: footerText
+                    });
+                }
+
+                if (buttons && Array.isArray(buttons) && buttons.length > 0) {
+                    formattedComponents.push({
+                        type: "BUTTONS",
+                        buttons: buttons.map(b => {
+                            if (typeof b === "string") {
+                                return { type: "QUICK_REPLY", text: b.substring(0, 25) };
+                            }
+                            return b;
+                        })
+                    });
+                }
+            }
+
+            const payload = {
+                name: formattedName,
+                category: category || "UTILITY",
+                language: language,
+                components: formattedComponents
+            };
+
+            console.log(`[Meta Cloud API] Submitting template '${formattedName}' to WABA ${wabaId}...`);
+
+            const response = await axios.post(
+                `${this.apiUrl}/${wabaId}/message_templates`,
+                payload,
+                {
+                    headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        "Content-Type": "application/json",
+                    },
+                }
+            );
+
+            return {
+                success: true,
+                id: response.data.id,
+                status: response.data.status || "PENDING",
+                name: formattedName,
+                data: response.data
+            };
+        } catch (error) {
+            console.error("[Meta Cloud API] Error creating template:", error.response?.data || error.message);
+            return {
+                success: false,
+                error: error.response?.data?.error?.message || error.message,
+                details: error.response?.data
+            };
+        }
+    }
+
+    /**
+     * Delete a Message Template from Meta WABA
+     */
+    async deleteMessageTemplate(shopDomain, templateName) {
+        try {
+            const { wabaId, accessToken } = await this.getCredentials(shopDomain);
+            if (!wabaId || !accessToken) {
+                return { success: false, error: "WABA ID or Access Token missing for this shop" };
+            }
+
+            const formattedName = templateName.toLowerCase().trim();
+
+            const response = await axios.delete(
+                `${this.apiUrl}/${wabaId}/message_templates`,
+                {
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                    params: { name: formattedName }
+                }
+            );
+
+            return {
+                success: true,
+                data: response.data
+            };
+        } catch (error) {
+            console.error("[Meta Cloud API] Error deleting template:", error.response?.data || error.message);
+            return {
+                success: false,
+                error: error.response?.data?.error?.message || error.message
+            };
+        }
+    }
+
+
+    /**
      * Process incoming Meta Webhook body
      */
     processIncomingWebhook(webhookBody) {

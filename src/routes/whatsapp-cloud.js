@@ -137,6 +137,80 @@ router.get("/templates", async (req, res) => {
     }
 });
 
+// POST /api/whatsapp-cloud/templates - Submit a new template to Meta for approval
+router.post("/templates", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ success: false, error: "Missing shop parameter" });
+
+        const { name, category, language, bodyText, headerText, footerText, buttons, examples, components } = req.body;
+
+        if (!name || (!bodyText && (!components || components.length === 0))) {
+            return res.status(400).json({
+                success: false,
+                error: "Template name and body text are required"
+            });
+        }
+
+        const result = await whatsappCloudService.createMessageTemplate(shopDomain, {
+            name,
+            category,
+            language: language || "en_US",
+            bodyText,
+            headerText,
+            footerText,
+            buttons,
+            examples,
+            components
+        });
+
+        if (result.success) {
+            res.json({
+                success: true,
+                message: `Template '${result.name}' submitted to Meta for approval!`,
+                templateId: result.id,
+                status: result.status
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error,
+                details: result.details
+            });
+        }
+    } catch (err) {
+        console.error("Error creating Meta template:", err);
+        res.status(500).json({ success: false, error: "Internal server error" });
+    }
+});
+
+// DELETE /api/whatsapp-cloud/templates/:name - Delete a template from Meta
+router.delete("/templates/:name", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ success: false, error: "Missing shop parameter" });
+
+        const templateName = req.params.name;
+        const result = await whatsappCloudService.deleteMessageTemplate(shopDomain, templateName);
+
+        if (result.success) {
+            res.json({
+                success: true,
+                message: `Template '${templateName}' deleted from Meta WABA`
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+    } catch (err) {
+        console.error("Error deleting Meta template:", err);
+        res.status(500).json({ success: false, error: "Internal server error" });
+    }
+});
+
+
 // GET /api/whatsapp-cloud/webhooks - Webhook verification for Meta Console
 router.get("/webhooks", (req, res) => {
     try {
