@@ -196,12 +196,24 @@ router.post("/embedded-signup", async (req, res) => {
             return res.status(400).json({ error: "Failed to resolve Meta access token from signup flow" });
         }
 
-        const resolvedPhoneId = phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+        let resolvedPhoneId = phoneNumberId;
+        let resolvedWabaId = wabaId;
+
+        // Auto-discover WABA & Phone Number IDs from Meta Graph API if not passed by frontend
+        if (!resolvedPhoneId || !resolvedWabaId) {
+            const discovered = await whatsappCloudService.autoDiscoverWabaCredentials(activeAccessToken);
+            if (!resolvedPhoneId && discovered.phoneNumberId) resolvedPhoneId = discovered.phoneNumberId;
+            if (!resolvedWabaId && discovered.wabaId) resolvedWabaId = discovered.wabaId;
+        }
+
+        // Final fallback to environment variables
+        resolvedPhoneId = resolvedPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+        resolvedWabaId = resolvedWabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+
         const verifyRes = await whatsappCloudService.verifyCredentials(resolvedPhoneId, activeAccessToken);
 
         const displayPhone = verifyRes.data?.display_phone_number || "Connected Meta Phone";
 
-        const resolvedWabaId = wabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
         if (resolvedWabaId) {
             await whatsappCloudService.subscribeWabaWebhooks(resolvedWabaId, activeAccessToken);
         }

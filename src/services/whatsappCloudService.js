@@ -121,6 +121,40 @@ class WhatsAppCloudService {
                 error: error.message
             };
         }
+    /**
+     * Auto-discovers merchant WABA ID and Phone Number ID directly from Meta Graph API using access token
+     */
+    async autoDiscoverWabaCredentials(accessToken) {
+        try {
+            console.log("[Meta Auto-Discovery] Discovering WABA accounts for merchant token...");
+            const wabaRes = await axios.get(`${this.apiUrl}/me/whatsapp_business_accounts`, {
+                params: { access_token: accessToken }
+            });
+
+            const wabaList = wabaRes.data?.data || [];
+            if (wabaList.length === 0) {
+                console.warn("[Meta Auto-Discovery] No WABA accounts found for access token");
+                return { wabaId: null, phoneNumberId: null };
+            }
+
+            const wabaId = wabaList[0].id;
+
+            console.log(`[Meta Auto-Discovery] Found WABA ${wabaId}. Discovering phone numbers...`);
+            const phoneRes = await axios.get(`${this.apiUrl}/${wabaId}/phone_numbers`, {
+                params: { access_token: accessToken }
+            });
+
+            const phoneList = phoneRes.data?.data || [];
+            const phoneNumberId = phoneList[0]?.id || null;
+            const displayPhone = phoneList[0]?.display_phone_number || null;
+
+            console.log(`[Meta Auto-Discovery] Success! Discovered WABA ID: ${wabaId}, Phone Number ID: ${phoneNumberId}, Phone: ${displayPhone}`);
+
+            return { wabaId, phoneNumberId, displayPhone, phoneData: phoneList[0] };
+        } catch (err) {
+            console.warn("[Meta Auto-Discovery] Discovery notice:", err.response?.data?.error?.message || err.message);
+            return { wabaId: null, phoneNumberId: null };
+        }
     }
 
 
