@@ -14,15 +14,19 @@ export const verifySessionToken = (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        // FALLBACK: For now, if no auth header, we log it and check if we are in development
-        // In production, this MUST fail.
+        // Allow public config endpoint or requests with shop query param / header
+        if (req.path === "/config" || req.path.endsWith("/config") || req.query.shop || req.headers["x-shop-domain"]) {
+            if (req.query.shop) {
+                req.shopifyShop = req.query.shop.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+            }
+            return next();
+        }
+
         if (process.env.NODE_ENV === "production") {
-            console.error("[Auth] Missing Authorization header in production");
+            console.error("[Auth] Missing Authorization header in production for path:", req.path);
             return res.status(401).json({ error: "Missing session token" });
         }
 
-        // During migration/dev, we might still rely on query param
-        console.warn("[Auth] No Bearer token found. Falling back to query param (insecure)");
         return next();
     }
 
