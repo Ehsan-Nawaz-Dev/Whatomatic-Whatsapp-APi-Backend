@@ -394,7 +394,7 @@ class WhatsAppCloudService {
                 const merchant = shopDomain ? await Merchant.findOne({ shopDomain }) : null;
                 const regRes = await this.registerPhoneNumber(phoneNumberId, accessToken, merchant?.metaRegistrationPin);
 
-                if (regRes.success) {
+                if (regRes.success && !regRes.alreadyRegistered) {
                     if (shopDomain) {
                         await Merchant.updateOne(
                             { shopDomain },
@@ -404,11 +404,17 @@ class WhatsAppCloudService {
                     return this.postMessage(shopDomain, payload, { allowRegisterRetry: false });
                 }
 
+                if (regRes.alreadyRegistered) {
+                    // Try send once more without register retry
+                    const retrySend = await this.postMessage(shopDomain, payload, { allowRegisterRetry: false });
+                    if (retrySend.success) return retrySend;
+                }
+
                 return {
                     success: false,
                     error: regRes.needsPin
                         ? regRes.error
-                        : `WhatsApp number is not registered for Cloud API messaging. Auto-registration failed: ${regRes.error}`,
+                        : "Your phone number is linked to Meta but requires SMS/Voice verification in Meta WhatsApp Manager. Please open Meta WhatsApp Manager (Phone Numbers) and click 'Verify' to enable Cloud API sending.",
                     code: 133010,
                     needsPin: regRes.needsPin,
                 };
