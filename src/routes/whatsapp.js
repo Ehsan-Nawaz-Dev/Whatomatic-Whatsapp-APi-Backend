@@ -82,6 +82,8 @@ router.get("/status", async (req, res) => {
             // platform_type CLOUD_API means the number is registered for messaging.
             // Without registration, sends fail with "(#133010) Account not registered".
             const registered = merchant.metaRegistered || verifyRes.data.platform_type === "CLOUD_API";
+            const codeVerificationStatus = verifyRes.data.code_verification_status || "UNKNOWN";
+            const needsVerification = codeVerificationStatus === "NOT_VERIFIED";
 
             return res.json({
                 connected: true,
@@ -89,7 +91,9 @@ router.get("/status", async (req, res) => {
                 deviceName: "Meta Cloud API",
                 status: "connected",
                 qualityRating: qualityRating,
-                registered
+                registered,
+                codeVerificationStatus,
+                needsVerification
             });
         }
 

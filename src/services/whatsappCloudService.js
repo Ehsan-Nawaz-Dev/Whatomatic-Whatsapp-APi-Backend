@@ -237,6 +237,27 @@ class WhatsAppCloudService {
                 return { success: true, alreadyRegistered: true, pin: registrationPin };
             }
 
+            // Code 100 or "Invalid parameter": PIN parameter is rejected on numbers without 2FA PIN enabled.
+            // Retry registration with ONLY messaging_product: "whatsapp".
+            if (metaError?.code === 100 || /invalid parameter/i.test(metaError?.message || "")) {
+                console.log(`[Meta Cloud API] Retrying registration for ${phoneNumberId} without PIN payload...`);
+                try {
+                    const retryRes = await axios.post(
+                        `${this.apiUrl}/${phoneNumberId}/register`,
+                        { messaging_product: "whatsapp" },
+                        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+                    );
+                    console.log(`[Meta Cloud API] Phone number ${phoneNumberId} successfully registered!`);
+                    return { success: true, data: retryRes.data };
+                } catch (retryErr) {
+                    const retryMetaError = retryErr.response?.data?.error;
+                    if (retryMetaError?.code === 133006 || /already registered/i.test(retryMetaError?.message || "")) {
+                        return { success: true, alreadyRegistered: true };
+                    }
+                    console.error("[Meta Cloud API] Retry registration failed:", retryMetaError || retryErr.message);
+                }
+            }
+
             console.error("[Meta Cloud API] Phone registration failed:", metaError || error.message);
             return {
                 success: false,
