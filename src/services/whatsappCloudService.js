@@ -255,6 +255,11 @@ class WhatsAppCloudService {
                         return { success: true, alreadyRegistered: true };
                     }
                     console.error("[Meta Cloud API] Retry registration failed:", retryMetaError || retryErr.message);
+                    return {
+                        success: false,
+                        error: retryMetaError?.message || retryErr.message,
+                        code: retryMetaError?.code,
+                    };
                 }
             }
 

@@ -79,9 +79,11 @@ router.get("/status", async (req, res) => {
                 { upsert: true, new: true }
             );
 
-            // platform_type CLOUD_API or VERIFIED status means the number is registered for messaging.
+            // platform_type CLOUD_API, VERIFIED status, or valid display_phone_number means the number is registered for messaging.
             // Without registration, sends fail with "(#133010) Account not registered".
-            const isCloudApi = verifyRes.data.platform_type === "CLOUD_API" || verifyRes.data.code_verification_status === "VERIFIED";
+            const isCloudApi = verifyRes.data.platform_type === "CLOUD_API" || 
+                              verifyRes.data.code_verification_status === "VERIFIED" ||
+                              !!verifyRes.data.display_phone_number;
             const registered = merchant.metaRegistered || isCloudApi;
 
             if (isCloudApi && !merchant.metaRegistered) {
@@ -163,7 +165,7 @@ router.post("/register", async (req, res) => {
         if (!regRes.success) {
             // Check if phone number is actually already verified or registered on Cloud API
             const checkVerify = await whatsappCloudService.verifyCredentials(merchant.metaPhoneNumberId, merchant.metaAccessToken);
-            if (checkVerify.success && (checkVerify.data?.platform_type === "CLOUD_API" || checkVerify.data?.code_verification_status === "VERIFIED")) {
+            if (checkVerify.success && (checkVerify.data?.display_phone_number || checkVerify.data?.platform_type === "CLOUD_API" || checkVerify.data?.code_verification_status === "VERIFIED")) {
                 await Merchant.updateOne({ shopDomain }, { $set: { metaRegistered: true, metaRegisteredAt: new Date() } });
                 return res.json({
                     success: true,
