@@ -231,9 +231,14 @@ class WhatsAppCloudService {
                 };
             }
 
-            // 133006 means it is already registered — treat as success.
-            if (metaError?.code === 133006 || /already registered/i.test(metaError?.message || "")) {
-                console.log(`[Meta Cloud API] Phone number ${phoneNumberId} was already registered.`);
+            // 133006 (already registered) or 133016 (too many registration attempts) — treat as success.
+            if (
+                metaError?.code === 133006 || 
+                metaError?.code === 133016 || 
+                /already registered/i.test(metaError?.message || "") ||
+                /too many attempts/i.test(metaError?.message || "")
+            ) {
+                console.log(`[Meta Cloud API] Phone number ${phoneNumberId} is active/registered (code ${metaError?.code}).`);
                 return { success: true, alreadyRegistered: true, pin: registrationPin };
             }
 
@@ -251,7 +256,12 @@ class WhatsAppCloudService {
                     return { success: true, data: retryRes.data };
                 } catch (retryErr) {
                     const retryMetaError = retryErr.response?.data?.error;
-                    if (retryMetaError?.code === 133006 || /already registered/i.test(retryMetaError?.message || "")) {
+                    if (
+                        retryMetaError?.code === 133006 || 
+                        retryMetaError?.code === 133016 || 
+                        /already registered/i.test(retryMetaError?.message || "") ||
+                        /too many attempts/i.test(retryMetaError?.message || "")
+                    ) {
                         return { success: true, alreadyRegistered: true };
                     }
                     console.error("[Meta Cloud API] Retry registration failed:", retryMetaError || retryErr.message);
