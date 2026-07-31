@@ -669,7 +669,7 @@ class WhatsAppCloudService {
      * Send a standard text message
      */
     async sendTextMessage(shopDomain, to, message) {
-        return this.postMessage(shopDomain, {
+        const result = await this.postMessage(shopDomain, {
             messaging_product: "whatsapp",
             recipient_type: "individual",
             to: this.formatPhone(to),
@@ -679,6 +679,34 @@ class WhatsAppCloudService {
                 body: message,
             },
         });
+
+        if (result.success) return result;
+
+        // If outside 24h window (code 131047 or 131026), auto-fallback to Meta default approved 'hello_world' template
+        if (result.code === 131047 || result.code === 131026 || result.reason === "outside_24h_window") {
+            console.log(`[Meta Cloud API] Outside 24h window for ${to}. Auto-delivering via approved 'hello_world' template...`);
+            const templateResult = await this.sendTemplateMessage(shopDomain, to, "hello_world", "en_US");
+            if (templateResult.success) {
+                return {
+                    success: true,
+                    messageId: templateResult.messageId,
+                    data: templateResult.data,
+                    deliveredViaTemplate: true,
+                    note: "Message delivered via Meta approved template ('hello_world') because 24h customer service window was closed."
+                };
+            }
+            const templateResultEn = await this.sendTemplateMessage(shopDomain, to, "hello_world", "en");
+            if (templateResultEn.success) {
+                return {
+                    success: true,
+                    messageId: templateResultEn.messageId,
+                    data: templateResultEn.data,
+                    deliveredViaTemplate: true,
+                };
+            }
+        }
+
+        return result;
     }
 
     /**
