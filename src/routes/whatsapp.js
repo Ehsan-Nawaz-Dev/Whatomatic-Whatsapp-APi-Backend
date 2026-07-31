@@ -79,9 +79,15 @@ router.get("/status", async (req, res) => {
                 { upsert: true, new: true }
             );
 
-            // platform_type CLOUD_API means the number is registered for messaging.
+            // platform_type CLOUD_API or VERIFIED status means the number is registered for messaging.
             // Without registration, sends fail with "(#133010) Account not registered".
-            const registered = merchant.metaRegistered || verifyRes.data.platform_type === "CLOUD_API";
+            const isCloudApi = verifyRes.data.platform_type === "CLOUD_API" || verifyRes.data.code_verification_status === "VERIFIED";
+            const registered = merchant.metaRegistered || isCloudApi;
+
+            if (isCloudApi && !merchant.metaRegistered) {
+                await Merchant.updateOne({ shopDomain }, { $set: { metaRegistered: true, metaRegisteredAt: new Date() } });
+            }
+
             const codeVerificationStatus = verifyRes.data.code_verification_status || "UNKNOWN";
             const needsVerification = codeVerificationStatus === "NOT_VERIFIED";
 
@@ -155,6 +161,17 @@ router.post("/register", async (req, res) => {
         );
 
         if (!regRes.success) {
+            // Check if phone number is actually already verified or registered on Cloud API
+            const checkVerify = await whatsappCloudService.verifyCredentials(merchant.metaPhoneNumberId, merchant.metaAccessToken);
+            if (checkVerify.success && (checkVerify.data?.platform_type === "CLOUD_API" || checkVerify.data?.code_verification_status === "VERIFIED")) {
+                await Merchant.updateOne({ shopDomain }, { $set: { metaRegistered: true, metaRegisteredAt: new Date() } });
+                return res.json({
+                    success: true,
+                    alreadyRegistered: true,
+                    message: "WhatsApp number is verified and active on Meta Cloud API."
+                });
+            }
+
             return res.status(400).json({
                 success: false,
                 error: regRes.error,
