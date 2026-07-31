@@ -196,6 +196,61 @@ class WhatsAppCloudService {
     }
 
     /**
+     * Requests an SMS or Voice OTP verification code from Meta Graph API for a phone number.
+     */
+    async requestVerificationCode(phoneNumberId, accessToken, codeMethod = "SMS", language = "en") {
+        try {
+            const response = await axios.post(
+                `${this.apiUrl}/${phoneNumberId}/request_code`,
+                {
+                    code_method: codeMethod.toUpperCase(),
+                    language: language,
+                },
+                { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+            );
+
+            console.log(`[Meta Cloud API] Verification code requested (${codeMethod}) for ${phoneNumberId}`);
+            return { success: true, data: response.data };
+        } catch (error) {
+            const metaError = error.response?.data?.error;
+            console.error("[Meta Cloud API] Request code failed:", metaError || error.message);
+            return {
+                success: false,
+                error: metaError?.message || error.message,
+                code: metaError?.code
+            };
+        }
+    }
+
+    /**
+     * Verifies the 6-digit SMS/Voice OTP code with Meta Graph API and registers the number for Cloud API messaging.
+     */
+    async verifyVerificationCode(phoneNumberId, accessToken, code) {
+        try {
+            const response = await axios.post(
+                `${this.apiUrl}/${phoneNumberId}/verify_code`,
+                { code: String(code).trim() },
+                { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+            );
+
+            console.log(`[Meta Cloud API] Phone number ${phoneNumberId} verified successfully with Meta OTP!`);
+
+            // Immediately register the number for Cloud API messaging
+            const regRes = await this.registerPhoneNumber(phoneNumberId, accessToken);
+
+            return { success: true, registered: regRes.success, data: response.data };
+        } catch (error) {
+            const metaError = error.response?.data?.error;
+            console.error("[Meta Cloud API] Verify code failed:", metaError || error.message);
+            return {
+                success: false,
+                error: metaError?.message || error.message,
+                code: metaError?.code
+            };
+        }
+    }
+
+    /**
      * Registers the phone number on the WhatsApp Cloud API.
      *
      * Embedded Signup attaches a number to the WABA but does NOT register it for

@@ -199,6 +199,79 @@ router.post("/register", async (req, res) => {
     }
 });
 
+// POST /api/whatsapp/request-verification - Send SMS/Voice OTP from Meta to merchant phone number
+router.post("/request-verification", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ error: "Missing shop parameter" });
+
+        const merchant = await Merchant.findOne({ shopDomain });
+        if (!merchant?.metaPhoneNumberId || !merchant?.metaAccessToken) {
+            return res.status(400).json({ error: "No Meta WhatsApp account connected" });
+        }
+
+        const method = req.body?.method || "SMS";
+        const result = await whatsappCloudService.requestVerificationCode(
+            merchant.metaPhoneNumberId,
+            merchant.metaAccessToken,
+            method
+        );
+
+        if (!result.success) {
+            return res.status(400).json({ success: false, error: result.error });
+        }
+
+        res.json({
+            success: true,
+            message: `Verification code sent via ${method}! Check your phone for the 6-digit Meta OTP code.`
+        });
+    } catch (err) {
+        console.error("Error requesting Meta verification code", err);
+        res.status(500).json({ error: err.message || "Internal server error" });
+    }
+});
+
+// POST /api/whatsapp/verify-code - Verify 6-digit OTP code with Meta and enable messaging
+router.post("/verify-code", async (req, res) => {
+    try {
+        const shopDomain = getShopDomain(req);
+        if (!shopDomain) return res.status(400).json({ error: "Missing shop parameter" });
+
+        const { code } = req.body;
+        if (!code || !/^\d{6}$/.test(String(code).trim())) {
+            return res.status(400).json({ error: "Please enter a valid 6-digit numeric verification code." });
+        }
+
+        const merchant = await Merchant.findOne({ shopDomain });
+        if (!merchant?.metaPhoneNumberId || !merchant?.metaAccessToken) {
+            return res.status(400).json({ error: "No Meta WhatsApp account connected" });
+        }
+
+        const result = await whatsappCloudService.verifyVerificationCode(
+            merchant.metaPhoneNumberId,
+            merchant.metaAccessToken,
+            code
+        );
+
+        if (!result.success) {
+            return res.status(400).json({ success: false, error: result.error });
+        }
+
+        await Merchant.updateOne(
+            { shopDomain },
+            { $set: { metaRegistered: true, metaRegisteredAt: new Date() } }
+        );
+
+        res.json({
+            success: true,
+            message: "Phone number verified & enabled for Meta WhatsApp Cloud API messaging!"
+        });
+    } catch (err) {
+        console.error("Error verifying Meta OTP code", err);
+        res.status(500).json({ error: err.message || "Internal server error" });
+    }
+});
+
 // POST /api/whatsapp/credentials - Save Meta credentials for merchant
 router.post("/credentials", async (req, res) => {
     try {
